@@ -24,6 +24,8 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:3.3.2")
     implementation("io.ktor:ktor-serialization-gson:3.3.2")
     implementation("io.ktor:ktor-server-content-negotiation:3.3.2")
+    implementation("io.ktor:ktor-server-host-common:3.3.2")
+    implementation("io.ktor:ktor-server-status-pages:3.3.2")
     testImplementation("io.ktor:ktor-server-test-host")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
     
