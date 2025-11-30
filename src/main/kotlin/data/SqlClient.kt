@@ -13,11 +13,11 @@ object Database {
     private val ds by lazy {
         HikariDataSource(
             HikariConfig().apply {
-                jdbcUrl = System.getenv("JDBC_DATABASE_URL")
+                jdbcUrl = System.getenv("MYSQL_DATABASE_URL")
                     ?: "jdbc:mysql://localhost:3306/theTower"
-                username = System.getenv("JDBC_DATABASE_USERNAME")
+                username = System.getenv("MYSQL_DATABASE_USERNAME")
                     ?: "root"
-                password = System.getenv("JDBC_DATABASE_PASSWORD")
+                password = System.getenv("MYSQL_DATABASE_PASSWORD")
                     ?: "123456"
                 driverClassName = "com.mysql.cj.jdbc.Driver"
                 maximumPoolSize = 10

@@ -1,21 +1,25 @@
 package com.lignting
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import com.lignting.data.BizException
 import com.lignting.routers.configureRouting
 import com.lignting.utils.uuid
 import io.ktor.serialization.gson.gson
 import io.ktor.server.application.*
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.UnauthorizedResponse
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondText
 
 fun main(args: Array<String>) {
     io.ktor.server.netty.EngineMain.main(args)
 }
 
 fun Application.module() {
-    configureRouting()
     install(ContentNegotiation) {
         gson()
     }
@@ -26,4 +30,33 @@ fun Application.module() {
             call.respond(cause.toResponse(traceId))
         }
     }
+    
+    install(Authentication) {
+        jwt("auth-jwt") {
+            realm = "Access to 'login'"
+            verifier(
+                JWT
+                    .require(Algorithm.HMAC256("secret"))
+                    .withAudience("http://0.0.0.0:8080/login")
+                    .withIssuer("http://0.0.0.0:8080/")
+                    .build()
+            )
+            validate { credential ->
+                if (credential.payload.getClaim("username").asString().isNotEmpty()) {
+                    JWTPrincipal(credential.payload)
+                } else {
+                    null
+                }
+            }
+            challenge { defaultScheme, realm ->
+                call.respond(
+                    BizException(
+                        20001,
+                        "user is not authenticated"
+                    )
+                )
+            }
+        }
+    }
+    configureRouting()
 }
