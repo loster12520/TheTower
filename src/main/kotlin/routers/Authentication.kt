@@ -14,7 +14,6 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
-import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
 import org.babyfish.jimmer.sql.kt.ast.expression.eq
 import java.util.Date
@@ -47,12 +46,13 @@ fun Application.authenticationRouting() {
             if (oldUser != null) {
                 throw BizException(10001, "User already exists")
             }
-            val result = sqlClient.save(user.let {
+            sqlClient.save(user.let {
                 User {
                     userName = it.userName
                     password = it.password
                 }
             })
+            defaultSuccess()
         }
         
         authenticate("auth-jwt") {

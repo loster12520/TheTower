@@ -29,6 +29,15 @@ fun Application.module() {
             val traceId = call.request.headers["traceId"] ?: uuid()
             call.respond(cause.toResponse(traceId))
         }
+        exception<Throwable> { call, cause ->
+            val traceId = call.request.headers["traceId"] ?: uuid()
+            call.respond(
+                BizException(
+                    50000,
+                    "Internal server error: ${cause.message ?: "No message"}"
+                ).toResponse(traceId)
+            )
+        }
     }
     
     install(Authentication) {
