@@ -5,7 +5,16 @@ export default defineConfig({
     access: {},
     model: {},
     initialState: {},
-    request: {},
+    request: {
+        dataField: "data"
+    },
+    proxy: {
+        '/api': {
+            'target': process.env.API_SERVER ?? "http://localhost:8888",
+            'changeOrigin': true,
+            'pathRewrite': {'^/api': ''},
+        }
+    },
     layout: false,
     routes: [
         {
@@ -24,5 +33,9 @@ export default defineConfig({
         }
     ],
     npmClient: 'yarn',
+    extraBabelPlugins:[
+        ["@babel/plugin-proposal-decorators", { "legacy": true }],
+        ["@babel/plugin-proposal-class-properties", { "loose": true }]
+    ]
 });
 

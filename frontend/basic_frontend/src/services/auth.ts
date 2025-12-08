@@ -1,15 +1,21 @@
 import {request} from "@@/plugin-request";
 
 export const login = async (data: {
-    username: string,
+    userName: string,
     password: string
 }) => (
-    request("/login", {data})
+    request("/api/login", {
+        method: "POST",
+        data
+    })
 );
 
 export const register = async (data: {
-    username: string,
+    userName: string,
     password: string
 }) => (
-    request("/register", {data})
+    request("/api/register", {
+        method: "POST",
+        data
+    })
 );

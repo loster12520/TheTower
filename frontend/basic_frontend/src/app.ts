@@ -14,10 +14,20 @@ export const request: RequestConfig = {
     timeout: 10000,
     errorConfig: {
         errorHandler() {
-
         },
         errorThrower() {
-
         }
     },
+    requestInterceptors: [
+        (url, options) => {
+            console.log(`开始请求${url}`, options);
+            return {url, options}
+        },
+    ],
+    responseInterceptors: [
+        async (response) => {
+            console.log("请求结束", response);
+            return response;
+        },
+    ],
 }
