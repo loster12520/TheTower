@@ -11,31 +11,18 @@
 
   padding: 50px 20px;
   position: relative;
+  overflow: hidden;
+  transition: background 0.3s ease;
 
   .prompt {
     position: absolute;
     font-family: var(--art-font), serif;
     font-size: 300px;
     color: rgba(var(--primary-color-rgb), 0.3);
-    top: 5%;
-  }
-
-  .input {
-    border: none;
-    height: 40px;
-    border-radius: var(--border-radius-small);
-    background: rgba(var(--background-color-rgb),0.5);
-
-    &:hover {
-      border: 2px solid var(--primary-color);
-    }
-
-    &:focus {
-      outline: none;
-      border: 2px solid var(--primary-color);
-    }
-
-    z-index: 20;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    user-select: none;
   }
 
   .button {
@@ -53,5 +40,36 @@
     }
 
     z-index: 20;
+  }
+
+  .next {
+    --radius: 80px;
+    position: absolute;
+    bottom: calc(0px - var(--radius));
+    right: calc(0px - var(--radius));
+    width: calc(2 * var(--radius));
+    height: calc(2 * var(--radius));
+    border-radius: 50%;
+    background: radial-gradient(circle at center, var(--next-color), transparent);
+    user-select: none;
+    z-index: 5;
+    transition: transform 0.3s ease, background 0.3s ease;
+    transform: scale(1);
+
+    &:hover {
+      transform: scale(1.2);
+
+      &::before {
+        content: var(--next-text);
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-100%, -100%);
+        color: var(--background-color);
+        font-size: 16px;
+        user-select: none;
+        padding: 5px;
+      }
+    }
   }
 }

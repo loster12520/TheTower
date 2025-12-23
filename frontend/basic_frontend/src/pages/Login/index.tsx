@@ -4,6 +4,7 @@ import {authStore} from "@/models/auth";
 import {observer} from "mobx-react";
 import {history} from "umi";
 import {message} from "antd";
+import Input from "@/components/UI/Input";
 
 const Login = () => {
     const [tab, setTab] = useState("Login");
@@ -19,7 +20,8 @@ const Login = () => {
                         history.push("/home");
                     }
                 })
-            }
+            },
+            next: "Register",
         },
         Register: {
             color: "rgba(82,196,26,0.3)",
@@ -30,55 +32,49 @@ const Login = () => {
                         setTab("Login");
                     }
                 })
-            }
+            },
+            next: "Login",
         },
         Loading: {
             color: "rgba(250,173,20,0.3)",
             submit: () => {
                 message.info("Please wait...");
             },
-            submitText: "Loading..."
+            submitText: "Loading...",
         }
     };
 
     const containerRef = useRef<HTMLDivElement | null>(null)
-    const handleScroll = (event: WheelEvent) => {
-        if (tab === "Loading") return;
-        if (event.deltaY > 0) {
-            setTab("Register");
-        } else {
-            setTab("Login");
-        }
-    }
-
-    useEffect(() => {
-        const el = containerRef.current
-        const tabElement = document.querySelector(`.${style.prompt}`);
-        const stopPropagation = (e: Event) => {
-            e.stopPropagation();
-        }
-        if (el) {
-            el.addEventListener("wheel", handleScroll)
-            tabElement?.addEventListener("wheel", stopPropagation)
-            return () => {
-                el.removeEventListener("wheel", handleScroll)
-                tabElement?.removeEventListener("wheel", stopPropagation)
-            }
-        }
-    }, []);
 
     return <div className={"page"}>
-        <div className={style.container} ref={containerRef}>
-            <div className={style.prompt} style={{color: options[tab].color}}>{tab}</div>
-            <input placeholder={"Please enter your username"} className={style.input} value={username} onChange={
-                (e) => setUsername(e.target.value)
-            }/>
-            <input placeholder={"Please enter the password"} className={style.input} value={password} onChange={
-                (e) => setPassword(e.target.value)
-            }/>
+        <div
+            className={style.container}
+            ref={containerRef}
+            style={{
+                background: options[tab].color,
+                ['--next-color' as any]: options[options[tab].next]?.color ?? options[tab].color,
+                ['--next-text' as any]: `'${options[tab].next ?? ""}'`
+            }}
+        >
+            {/*<div className={style.prompt} style={{color: options[tab].color}}>{tab}</div>*/}
+            <Input
+                label={"Username"}
+                placeholder={"Please enter your username"}
+                value={username}
+                onChange={
+                    (value) => setUsername(value)
+                }/>
+            <Input
+                label={"Password"}
+                placeholder={"Please enter the password"}
+                value={password}
+                onChange={
+                    (value) => setPassword(value)
+                }/>
             <button className={style.button} onClick={() => options[tab].submit()}>
                 {options[tab].submitText ?? tab}
             </button>
+            <div className={style.next} onClick={() => options[tab].next && setTab(options[tab].next)}/>
         </div>
     </div>;
 }
