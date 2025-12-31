@@ -22,7 +22,7 @@ export default defineConfig({
             redirect: '/home',
         },
         {
-            name: '首页',
+            name: 'Home',
             path: '/home',
             component: './Home',
         },
@@ -30,12 +30,13 @@ export default defineConfig({
             name: '登录',
             path: '/login',
             component: './Login',
+            layout: false
         }
     ],
     npmClient: 'yarn',
-    extraBabelPlugins:[
-        ["@babel/plugin-proposal-decorators", { "legacy": true }],
-        ["@babel/plugin-proposal-class-properties", { "loose": true }]
+    extraBabelPlugins: [
+        ["@babel/plugin-proposal-decorators", {"legacy": true}],
+        ["@babel/plugin-proposal-class-properties", {"loose": true}]
     ]
 });
 
