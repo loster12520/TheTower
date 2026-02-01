@@ -1,0 +1,28 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "umi dev",
+    "build": "umi build",
+    "postinstall": "umi setup",
+    "start": "npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@ant-design/icons": "^6.1.0",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "@umijs/plugins": "^4.6.25",
+    "@xyflow/react": "^12.10.0",
+    "antd": "^6.2.2",
+    "axios": "^1.13.4",
+    "mobx": "^6.15.0",
+    "mobx-react-lite": "^4.1.1",
+    "typescript": "^5.9.3",
+    "umi": "^4.6.25"
+  }
+}
