@@ -15,3 +15,8 @@ data class ErrorDetail(
     val message: String,
     val details: Map<String, String>? = null
 )
+
+@Serializable
+data class DeletedData(
+    val deleted: Boolean
+)
