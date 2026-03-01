@@ -12,10 +12,13 @@ open class ApiException(
 class BadRequestException(
     message: String,
     details: Map<String, String>? = null
-) : ApiException(HttpStatusCode.BadRequest, "BAD_REQUEST", message, details)
+) : ApiException(HttpStatusCode.BadRequest, ErrorCodes.BAD_REQUEST, message, details)
 
-class NotFoundException(message: String) :
-    ApiException(HttpStatusCode.NotFound, "NOT_FOUND", message)
+class TemplateNotFoundException(message: String) :
+    ApiException(HttpStatusCode.NotFound, ErrorCodes.TEMPLATE_NOT_FOUND, message)
+
+class RunNotFoundException(message: String) :
+    ApiException(HttpStatusCode.NotFound, ErrorCodes.RUN_NOT_FOUND, message)
 
 class ConflictException(message: String) :
-    ApiException(HttpStatusCode.Conflict, "CONFLICT", message)
+    ApiException(HttpStatusCode.Conflict, ErrorCodes.TEMPLATE_CONFLICT, message)

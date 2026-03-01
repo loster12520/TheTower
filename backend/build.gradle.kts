@@ -27,6 +27,9 @@ dependencies {
     
     // Playwright
     implementation("com.microsoft.playwright:playwright:1.49.0")
+
+    // SQLite
+    implementation("org.xerial:sqlite-jdbc:3.46.1.3")
     
     // Logging
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")

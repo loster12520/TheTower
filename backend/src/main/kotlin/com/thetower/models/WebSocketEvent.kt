@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 data class RunEvent(
     val runId: String,
+    val requestId: String? = null,
     val seq: Long,
     val ts: String,
     val type: EventType,

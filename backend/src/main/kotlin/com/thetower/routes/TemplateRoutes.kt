@@ -6,7 +6,9 @@ import com.thetower.models.DeletedData
 import com.thetower.models.PatchTemplateRequest
 import com.thetower.models.SaveTemplateRequest
 import com.thetower.models.TemplateListData
+import com.thetower.models.success
 import com.thetower.services.TemplateService
+import com.thetower.utils.requestId
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
@@ -19,88 +21,63 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import java.util.UUID
 
 fun Application.templateRoutes(templateService: TemplateService) {
     routing {
         route("/api/v1/templates") {
             get {
                 val includeLastRun = call.request.queryParameters["includeLastRun"]?.toBooleanStrictOrNull() ?: true
-                val items = templateService.list(includeLastRun)
+                val items = templateService.getTemplates(includeLastRun)
                 call.respond(
                     HttpStatusCode.OK,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = TemplateListData(items),
-                        error = null
-                    )
+                    TemplateListData(items).success(call.requestId())
                 )
             }
 
             post {
                 val request = call.receive<CreateTemplateRequest>()
-                val template = templateService.create(request)
+                val template = templateService.createTemplate(request)
                 call.respond(
                     HttpStatusCode.Created,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = template,
-                        error = null
-                    )
+                    template.success(call.requestId())
                 )
             }
 
             get("/{id}") {
                 val id = call.parameters["id"] ?: ""
-                val template = templateService.get(id)
+                val template = templateService.getTemplateById(id)
                 call.respond(
                     HttpStatusCode.OK,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = template,
-                        error = null
-                    )
+                    template.success(call.requestId())
                 )
             }
 
             patch("/{id}") {
                 val id = call.parameters["id"] ?: ""
                 val request = call.receive<PatchTemplateRequest>()
-                val template = templateService.patch(id, request)
+                val template = templateService.updateTemplateMeta(id, request)
                 call.respond(
                     HttpStatusCode.OK,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = template,
-                        error = null
-                    )
+                    template.success(call.requestId())
                 )
             }
 
             put("/{id}") {
                 val id = call.parameters["id"] ?: ""
                 val request = call.receive<SaveTemplateRequest>()
-                val template = templateService.saveSteps(id, request)
+                val template = templateService.updateTemplateSteps(id, request)
                 call.respond(
                     HttpStatusCode.OK,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = template,
-                        error = null
-                    )
+                    template.success(call.requestId())
                 )
             }
 
             delete("/{id}") {
                 val id = call.parameters["id"] ?: ""
-                templateService.delete(id)
+                templateService.deleteTemplate(id)
                 call.respond(
                     HttpStatusCode.OK,
-                    ApiResponse(
-                        requestId = UUID.randomUUID().toString(),
-                        data = DeletedData(deleted = true),
-                        error = null
-                    )
+                    DeletedData(deleted = true).success(call.requestId())
                 )
             }
         }

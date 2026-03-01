@@ -9,9 +9,12 @@ import com.thetower.models.RunStatus
 import com.thetower.models.StartRunData
 import com.thetower.repository.RunRepository
 import com.thetower.utils.BadRequestException
-import com.thetower.utils.NotFoundException
+import com.thetower.utils.ErrorCodes
+import com.thetower.utils.RunNotFoundException
+import com.thetower.utils.TtlCache
 import com.thetower.utils.newId
 import com.thetower.utils.nowIso
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,13 +36,17 @@ class RunService(
     private val runRepository: RunRepository,
     private val templateService: TemplateService
 ) {
+    private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runningJobs = ConcurrentHashMap<String, Job>()
     private val eventFlows = ConcurrentHashMap<String, MutableSharedFlow<RunEvent>>()
     private val seqCounters = ConcurrentHashMap<String, AtomicLong>()
+    private val runRequestIds = ConcurrentHashMap<String, String>()
+    private val runByIdCache = TtlCache<String, Run>(ttlMs = 10_000)
+    private val runListCache = TtlCache<String, Pair<List<Run>, Int>>(ttlMs = 10_000)
 
-    fun start(templateId: String, dryRun: Boolean): StartRunData {
-        val template = templateService.get(templateId)
+    fun startRun(templateId: String, dryRun: Boolean, requestId: String? = null): StartRunData {
+        val template = templateService.getTemplateById(templateId)
         if (template.steps.isEmpty() && !dryRun) {
             throw BadRequestException("steps 不能为空", mapOf("field" to "steps"))
         }
@@ -55,10 +62,13 @@ class RunService(
             finishedAt = null,
             error = null
         )
-        runRepository.save(initialRun)
+        persistRun(initialRun)
 
         eventFlows[runId] = MutableSharedFlow(replay = 32, extraBufferCapacity = 128)
         seqCounters[runId] = AtomicLong(0)
+        if (!requestId.isNullOrBlank()) {
+            runRequestIds[runId] = requestId
+        }
 
         val job = scope.launch {
             executeRun(runId, templateId, dryRun)
@@ -71,15 +81,18 @@ class RunService(
         )
     }
 
-    fun restart(runId: String): StartRunData {
-        val run = get(runId)
-        return start(run.templateId, dryRun = false)
+    fun restartRun(runId: String): StartRunData {
+        val run = getRunById(runId)
+        val requestId = runRequestIds[runId]
+        return startRun(run.templateId, dryRun = false, requestId = requestId)
     }
 
-    fun get(runId: String): Run = runRepository.findById(runId)
-        ?: throw NotFoundException("运行 $runId 不存在")
+    fun getRunById(runId: String): Run = runRepository.findById(runId)
+        ?.also { runByIdCache.put(runId, it) }
+        ?: runByIdCache.get(runId)
+        ?: throw RunNotFoundException("运行 $runId 不存在")
 
-    fun list(
+    fun getRuns(
         templateId: String?,
         status: RunStatus?,
         from: String?,
@@ -87,13 +100,22 @@ class RunService(
         limit: Int?,
         offset: Int?
     ): Pair<List<Run>, Int> {
+        val cacheKey = "runs:templateId=$templateId:status=$status:from=$from:to=$to:limit=$limit:offset=$offset"
+        runListCache.get(cacheKey)?.let { cached ->
+            logger.debug { "cache.hit key=$cacheKey" }
+            return cached
+        }
+
         val fromInstant = from?.let { Instant.parse(it) }
         val toInstant = to?.let { Instant.parse(it) }
-        return runRepository.list(templateId, status, fromInstant, toInstant, limit, offset)
+        val result = runRepository.list(templateId, status, fromInstant, toInstant, limit, offset)
+        runListCache.put(cacheKey, result)
+        logger.debug { "cache.put key=$cacheKey" }
+        return result
     }
 
-    fun cancel(runId: String): Run {
-        val run = get(runId)
+    fun cancelRun(runId: String): Run {
+        val run = getRunById(runId)
         if (run.status != RunStatus.PENDING && run.status != RunStatus.RUNNING) {
             throw BadRequestException("运行状态为 ${run.status}，无法取消")
         }
@@ -103,7 +125,7 @@ class RunService(
             finishedAt = nowIso(),
             currentStepId = null
         )
-        runRepository.save(canceled)
+        persistRun(canceled)
         emit(
             runId,
             EventType.RUN_CANCELED,
@@ -118,21 +140,23 @@ class RunService(
         return canceled
     }
 
-    fun delete(runId: String): Boolean {
-        val run = runRepository.findById(runId) ?: throw NotFoundException("运行 $runId 不存在")
+    fun deleteRun(runId: String): Boolean {
+        val run = runRepository.findById(runId) ?: throw RunNotFoundException("运行 $runId 不存在")
         if (run.status == RunStatus.RUNNING || run.status == RunStatus.PENDING) {
             runningJobs[runId]?.cancel(CancellationException("Deleted by user"))
         }
         cleanupRuntime(runId)
-        return runRepository.delete(runId)
+        val deleted = runRepository.delete(runId)
+        invalidateRunCaches(runId)
+        return deleted
     }
 
     fun eventFlow(runId: String): SharedFlow<RunEvent>? = eventFlows[runId]
 
     private suspend fun executeRun(runId: String, templateId: String, dryRun: Boolean) {
         try {
-            val runningRun = get(runId).copy(status = RunStatus.RUNNING)
-            runRepository.save(runningRun)
+            val runningRun = getRunById(runId).copy(status = RunStatus.RUNNING)
+            persistRun(runningRun)
             emit(
                 runId,
                 EventType.RUN_STARTED,
@@ -143,7 +167,7 @@ class RunService(
 
             if (dryRun) {
                 val succeeded = runningRun.copy(status = RunStatus.SUCCEEDED, finishedAt = nowIso())
-                runRepository.save(succeeded)
+                persistRun(succeeded)
                 emit(runId, EventType.RUN_SUCCEEDED, buildJsonObject { put("summary", JsonPrimitive("dry-run")) })
                 templateService.updateLastRun(
                     templateId,
@@ -152,14 +176,14 @@ class RunService(
                 return
             }
 
-            val template = templateService.get(templateId)
+            val template = templateService.getTemplateById(templateId)
             for (step in template.steps) {
-                val current = get(runId)
+                val current = getRunById(runId)
                 if (current.status == RunStatus.CANCELED) {
                     return
                 }
 
-                runRepository.save(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
+                persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
                 emit(
                     runId,
                     EventType.STEP_STARTED,
@@ -202,13 +226,13 @@ class RunService(
                 )
             }
 
-            val succeeded = get(runId).copy(
+            val succeeded = getRunById(runId).copy(
                 status = RunStatus.SUCCEEDED,
                 currentStepId = null,
                 finishedAt = nowIso(),
                 error = null
             )
-            runRepository.save(succeeded)
+            persistRun(succeeded)
             emit(runId, EventType.RUN_SUCCEEDED, buildJsonObject { put("summary", JsonPrimitive("ok")) })
             templateService.updateLastRun(
                 templateId,
@@ -221,19 +245,19 @@ class RunService(
                 currentStepId = null
             )
             if (canceled != null) {
-                runRepository.save(canceled)
+                persistRun(canceled)
             }
         } catch (ex: Exception) {
-            val failed = get(runId).copy(
+            val failed = getRunById(runId).copy(
                 status = RunStatus.FAILED,
                 finishedAt = nowIso(),
                 currentStepId = null,
                 error = RunError(
-                    code = if (ex is BadRequestException) ex.code else "INTERNAL_ERROR",
+                    code = if (ex is BadRequestException) ex.code else ErrorCodes.INTERNAL_ERROR,
                     message = ex.message ?: "执行失败"
                 )
             )
-            runRepository.save(failed)
+            persistRun(failed)
             emit(
                 runId,
                 EventType.RUN_FAILED,
@@ -241,7 +265,7 @@ class RunService(
                     put(
                         "error",
                         buildJsonObject {
-                            put("code", JsonPrimitive(failed.error?.code ?: "INTERNAL_ERROR"))
+                            put("code", JsonPrimitive(failed.error?.code ?: ErrorCodes.INTERNAL_ERROR))
                             put("message", JsonPrimitive(failed.error?.message ?: "执行失败"))
                         }
                     )
@@ -261,6 +285,7 @@ class RunService(
         val seq = seqCounters[runId]?.incrementAndGet() ?: 1
         val event = RunEvent(
             runId = runId,
+            requestId = runRequestIds[runId],
             seq = seq,
             ts = nowIso(),
             type = type,
@@ -273,5 +298,20 @@ class RunService(
         runningJobs.remove(runId)
         eventFlows.remove(runId)
         seqCounters.remove(runId)
+        runRequestIds.remove(runId)
+    }
+
+    private fun persistRun(run: Run): Run {
+        val saved = runRepository.save(run)
+        runByIdCache.put(saved.id, saved)
+        runListCache.clear()
+        logger.info { "cache.invalidate scope=runs runId=${saved.id}" }
+        return saved
+    }
+
+    private fun invalidateRunCaches(runId: String) {
+        runByIdCache.invalidate(runId)
+        runListCache.clear()
+        logger.info { "cache.invalidate scope=runs runId=$runId" }
     }
 }

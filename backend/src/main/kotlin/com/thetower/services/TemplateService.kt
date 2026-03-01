@@ -9,30 +9,57 @@ import com.thetower.models.TemplateSummary
 import com.thetower.models.WorkflowTemplate
 import com.thetower.repository.TemplateRepository
 import com.thetower.utils.BadRequestException
-import com.thetower.utils.NotFoundException
+import com.thetower.utils.TemplateNotFoundException
+import com.thetower.utils.TtlCache
 import com.thetower.utils.newId
 import com.thetower.utils.nowIso
+import io.github.oshai.kotlinlogging.KotlinLogging
 
 class TemplateService(
     private val repository: TemplateRepository
 ) {
-    fun list(includeLastRun: Boolean): List<TemplateSummary> = repository.findAll()
-        .sortedByDescending { it.updatedAt }
-        .map { template ->
-            TemplateSummary(
-                id = template.id,
-                name = template.name,
-                description = template.description,
-                updatedAt = template.updatedAt,
-                stats = template.stats,
-                lastRun = if (includeLastRun) template.lastRun else null
-            )
+    private val logger = KotlinLogging.logger {}
+    private val listCache = TtlCache<String, List<TemplateSummary>>(ttlMs = 30_000)
+    private val byIdCache = TtlCache<String, WorkflowTemplate>(ttlMs = 15_000)
+
+    fun getTemplates(includeLastRun: Boolean): List<TemplateSummary> {
+        val cacheKey = "templates:includeLastRun=$includeLastRun"
+        listCache.get(cacheKey)?.let { cached ->
+            logger.debug { "cache.hit key=$cacheKey" }
+            return cached
         }
 
-    fun get(id: String): WorkflowTemplate = repository.findById(id)
-        ?: throw NotFoundException("模板 $id 不存在")
+        val items = repository.findAll()
+            .sortedByDescending { it.updatedAt }
+            .map { template ->
+                TemplateSummary(
+                    id = template.id,
+                    name = template.name,
+                    description = template.description,
+                    updatedAt = template.updatedAt,
+                    stats = template.stats,
+                    lastRun = if (includeLastRun) template.lastRun else null
+                )
+            }
+        listCache.put(cacheKey, items)
+        logger.debug { "cache.put key=$cacheKey" }
+        return items
+    }
 
-    fun create(request: CreateTemplateRequest): WorkflowTemplate {
+    fun getTemplateById(id: String): WorkflowTemplate {
+        byIdCache.get(id)?.let { cached ->
+            logger.debug { "cache.hit key=template:$id" }
+            return cached
+        }
+
+        val template = repository.findById(id)
+            ?: throw TemplateNotFoundException("模板 $id 不存在")
+        byIdCache.put(id, template)
+        logger.debug { "cache.put key=template:$id" }
+        return template
+    }
+
+    fun createTemplate(request: CreateTemplateRequest): WorkflowTemplate {
         if (request.name.isBlank()) {
             throw BadRequestException("name 不能为空", mapOf("field" to "name"))
         }
@@ -53,31 +80,35 @@ class TemplateService(
             stats = TemplateStats(stepCount = request.steps.size),
             lastRun = null
         )
-        return repository.save(template)
+        val saved = repository.save(template)
+        invalidateTemplateCaches(saved.id)
+        return saved
     }
 
-    fun patch(id: String, request: PatchTemplateRequest): WorkflowTemplate {
-        val current = get(id)
+    fun updateTemplateMeta(id: String, request: PatchTemplateRequest): WorkflowTemplate {
+        val current = getTemplateById(id)
         val nextName = request.name?.trim() ?: current.name
         if (nextName.isBlank()) {
             throw BadRequestException("name 不能为空", mapOf("field" to "name"))
         }
 
-        return repository.save(
+        val saved = repository.save(
             current.copy(
                 name = nextName,
                 description = request.description ?: current.description,
                 updatedAt = nowIso()
             )
         )
+        invalidateTemplateCaches(saved.id)
+        return saved
     }
 
-    fun saveSteps(id: String, request: SaveTemplateRequest): WorkflowTemplate {
+    fun updateTemplateSteps(id: String, request: SaveTemplateRequest): WorkflowTemplate {
         if (request.schemaVersion != "0.0.1") {
             throw BadRequestException("schemaVersion 必须为 0.0.1", mapOf("field" to "schemaVersion"))
         }
-        val current = get(id)
-        return repository.save(
+        val current = getTemplateById(id)
+        val saved = repository.save(
             current.copy(
                 schemaVersion = request.schemaVersion,
                 steps = request.steps,
@@ -86,17 +117,27 @@ class TemplateService(
                 stats = TemplateStats(stepCount = request.steps.size)
             )
         )
+        invalidateTemplateCaches(saved.id)
+        return saved
     }
 
-    fun delete(id: String): Boolean {
+    fun deleteTemplate(id: String): Boolean {
         if (!repository.delete(id)) {
-            throw NotFoundException("模板 $id 不存在")
+            throw TemplateNotFoundException("模板 $id 不存在")
         }
+        invalidateTemplateCaches(id)
         return true
     }
 
     fun updateLastRun(templateId: String, lastRun: LastRun) {
         val template = repository.findById(templateId) ?: return
         repository.save(template.copy(lastRun = lastRun, updatedAt = nowIso()))
+        invalidateTemplateCaches(templateId)
+    }
+
+    private fun invalidateTemplateCaches(templateId: String) {
+        byIdCache.invalidate(templateId)
+        listCache.clear()
+        logger.info { "cache.invalidate scope=templates templateId=$templateId" }
     }
 }

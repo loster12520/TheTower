@@ -9,6 +9,18 @@ data class ApiResponse<T>(
     val error: ErrorDetail? = null
 )
 
+fun <T> T.success(requestId: String): ApiResponse<T> = ApiResponse(
+    requestId = requestId,
+    data = this,
+    error = null
+)
+
+fun ErrorDetail.fail(requestId: String): ApiResponse<Nothing?> = ApiResponse(
+    requestId = requestId,
+    data = null,
+    error = this
+)
+
 @Serializable
 data class ErrorDetail(
     val code: String,
