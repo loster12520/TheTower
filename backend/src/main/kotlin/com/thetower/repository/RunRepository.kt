@@ -3,10 +3,12 @@ package com.thetower.repository
 import com.thetower.models.Run
 import com.thetower.models.RunError
 import com.thetower.models.RunStatus
+import com.thetower.persistence.jimmer.RunEntity
+import com.thetower.persistence.jimmer.RunEntityDraft
+import com.thetower.utils.JimmerSqlClientFactory
 import com.thetower.utils.SqliteConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.sql.DriverManager
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
@@ -15,77 +17,51 @@ class RunRepository(
 ) {
     private val storage = ConcurrentHashMap<String, Run>()
     private val json = Json { ignoreUnknownKeys = true }
+    private val sqlClient = JimmerSqlClientFactory.create(sqliteConfig)
 
     fun save(run: Run): Run {
-        if (!sqliteConfig.enabled) {
+        if (sqlClient == null) {
             storage[run.id] = run
             return run
         }
 
-        DriverManager.getConnection(sqliteConfig.jdbcUrl).use { conn ->
-            conn.prepareStatement(
-                """
-                INSERT INTO runs(
-                  id, template_id, status, current_step_id, started_at, finished_at, error_json
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                  template_id = excluded.template_id,
-                  status = excluded.status,
-                  current_step_id = excluded.current_step_id,
-                  started_at = excluded.started_at,
-                  finished_at = excluded.finished_at,
-                  error_json = excluded.error_json
-                """.trimIndent()
-            ).use { statement ->
-                statement.setString(1, run.id)
-                statement.setString(2, run.templateId)
-                statement.setString(3, run.status.name)
-                statement.setString(4, run.currentStepId)
-                statement.setString(5, run.startedAt)
-                statement.setString(6, run.finishedAt)
-                statement.setString(7, run.error?.let { json.encodeToString(it) })
-                statement.executeUpdate()
-            }
+        val entity = RunEntityDraft.`$`.produce {
+            id = run.id
+            templateId = run.templateId
+            status = run.status.name
+            currentStepId = run.currentStepId
+            startedAt = run.startedAt
+            finishedAt = run.finishedAt
+            errorJson = run.error?.let { json.encodeToString(it) }
         }
-
-        storage[run.id] = run
-        return run
+        val saved = mapEntity(sqlClient.entities.save(entity).modifiedEntity)
+        storage[saved.id] = saved
+        return saved
     }
 
     fun findById(id: String): Run? {
-        if (!sqliteConfig.enabled) {
+        if (sqlClient == null) {
             return storage[id]
         }
-
-        DriverManager.getConnection(sqliteConfig.jdbcUrl).use { conn ->
-            conn.prepareStatement(
-                """
-                SELECT id, template_id, status, current_step_id, started_at, finished_at, error_json
-                FROM runs
-                WHERE id = ?
-                """.trimIndent()
-            ).use { statement ->
-                statement.setString(1, id)
-                statement.executeQuery().use { rs ->
-                    return if (rs.next()) mapRow(rs) else null
-                }
-            }
-        }
+        val entity = sqlClient.entities.findById(RunEntity::class, id) ?: return null
+        return mapEntity(entity).also { storage[it.id] = it }
     }
 
     fun delete(id: String): Boolean {
-        if (!sqliteConfig.enabled) {
+        if (sqlClient == null) {
             return storage.remove(id) != null
         }
 
-        DriverManager.getConnection(sqliteConfig.jdbcUrl).use { conn ->
-            conn.prepareStatement("DELETE FROM runs WHERE id = ?").use { statement ->
-                statement.setString(1, id)
-                val deleted = statement.executeUpdate() > 0
-                storage.remove(id)
-                return deleted
-            }
+        val existing = sqlClient.entities.findById(RunEntity::class, id)
+        val deleted = if (existing != null) {
+            sqlClient.entities.delete(RunEntity::class, id).totalAffectedRowCount > 0
+        } else {
+            false
         }
+        if (deleted) {
+            storage.remove(id)
+        }
+        return deleted
     }
 
     fun list(
@@ -96,8 +72,8 @@ class RunRepository(
         limit: Int? = null,
         offset: Int? = null
     ): Pair<List<Run>, Int> {
-        if (sqliteConfig.enabled) {
-            return listFromSqlite(templateId, status, from, to, limit, offset)
+        if (sqlClient != null) {
+            return listFromJimmer(templateId, status, from, to, limit, offset)
         }
 
         val filtered = storage.values
@@ -118,7 +94,7 @@ class RunRepository(
         return Pair(items, total)
     }
 
-    private fun listFromSqlite(
+    private fun listFromJimmer(
         templateId: String?,
         status: RunStatus?,
         from: Instant?,
@@ -126,82 +102,40 @@ class RunRepository(
         limit: Int?,
         offset: Int?
     ): Pair<List<Run>, Int> {
-        val where = mutableListOf<String>()
-        val params = mutableListOf<Any>()
-
-        if (templateId != null) {
-            where += "template_id = ?"
-            params += templateId
-        }
-        if (status != null) {
-            where += "status = ?"
-            params += status.name
-        }
-        if (from != null) {
-            where += "(started_at IS NOT NULL AND started_at >= ?)"
-            params += from.toString()
-        }
-        if (to != null) {
-            where += "(started_at IS NOT NULL AND started_at <= ?)"
-            params += to.toString()
-        }
-
-        val whereSql = if (where.isEmpty()) "" else " WHERE ${where.joinToString(" AND ")}" 
-        val orderSql = " ORDER BY started_at DESC"
-        val pageSql = buildString {
-            if (limit != null) append(" LIMIT ?")
-            if (offset != null) append(" OFFSET ?")
-        }
-
-        DriverManager.getConnection(sqliteConfig.jdbcUrl).use { conn ->
-            val totalSql = "SELECT COUNT(*) FROM runs$whereSql"
-            val total = conn.prepareStatement(totalSql).use { statement ->
-                bindParams(statement, params)
-                statement.executeQuery().use { rs ->
-                    if (rs.next()) rs.getInt(1) else 0
-                }
+        val rows = sqlClient!!
+            .createQuery(RunEntity::class) {
+                select(table)
             }
+            .execute()
+            .map { mapEntity(it) }
 
-            val querySql =
-                "SELECT id, template_id, status, current_step_id, started_at, finished_at, error_json FROM runs$whereSql$orderSql$pageSql"
-            val items = conn.prepareStatement(querySql).use { statement ->
-                val queryParams = params.toMutableList()
-                if (limit != null) queryParams += limit
-                if (offset != null) queryParams += offset
-                bindParams(statement, queryParams)
-                statement.executeQuery().use { rs ->
-                    val list = mutableListOf<Run>()
-                    while (rs.next()) {
-                        list += mapRow(rs)
-                    }
-                    list
-                }
+        val filtered = rows.asSequence()
+            .filter { run -> templateId == null || run.templateId == templateId }
+            .filter { run -> status == null || run.status == status }
+            .filter { run ->
+                val started = run.startedAt?.let { Instant.parse(it) } ?: Instant.MIN
+                (from == null || started >= from) && (to == null || started <= to)
             }
+            .sortedByDescending { run -> run.startedAt ?: "" }
+            .toList()
 
-            return Pair(items, total)
-        }
+        filtered.forEach { storage[it.id] = it }
+        val total = filtered.size
+        val safeOffset = offset ?: 0
+        val safeLimit = limit ?: total
+        return Pair(filtered.drop(safeOffset).take(safeLimit), total)
     }
 
-    private fun bindParams(statement: java.sql.PreparedStatement, params: List<Any>) {
-        params.forEachIndexed { index, value ->
-            when (value) {
-                is String -> statement.setString(index + 1, value)
-                is Int -> statement.setInt(index + 1, value)
-                else -> statement.setObject(index + 1, value)
-            }
-        }
-    }
-
-    private fun mapRow(rs: java.sql.ResultSet): Run {
-        val errorJson = rs.getString("error_json")
+    private fun mapEntity(entity: RunEntity): Run {
+        val errorJson = entity.errorJson
         val error = errorJson?.let { json.decodeFromString<RunError>(it) }
         return Run(
-            id = rs.getString("id"),
-            templateId = rs.getString("template_id"),
-            status = RunStatus.valueOf(rs.getString("status")),
-            currentStepId = rs.getString("current_step_id"),
-            startedAt = rs.getString("started_at"),
-            finishedAt = rs.getString("finished_at"),
+            id = entity.id,
+            templateId = entity.templateId,
+            status = RunStatus.valueOf(entity.status),
+            currentStepId = entity.currentStepId,
+            startedAt = entity.startedAt,
+            finishedAt = entity.finishedAt,
             error = error
         )
     }

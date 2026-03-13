@@ -1,9 +1,25 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import type { ApiResponse, ApiError, HealthResponse, WorkflowTemplate, Run } from '@/models';
+import { appLogger, runtimeConfig } from '@/config/runtime';
+
+/**
+ * 统一请求层：
+ * - 使用运行时配置注入 baseURL 与鉴权头；
+ * - 标准化错误结构；
+ * - 在开发期输出请求摘要，便于联调追踪。
+ */
+
+const REQUEST_ID_HEADER = 'X-Request-Id';
+
+const createRequestId = (): string => {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).slice(2, 10);
+  return `fe-${timestamp}-${random}`;
+};
 
 // 创建 axios 实例
 const apiClient: AxiosInstance = axios.create({
-  baseURL: '/api/v1',
+  baseURL: runtimeConfig.apiBaseUrl,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json; charset=utf-8',
@@ -13,7 +29,22 @@ const apiClient: AxiosInstance = axios.create({
 // 请求拦截器 - 添加请求日志
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
+    const requestId = createRequestId();
+    config.headers[REQUEST_ID_HEADER] = requestId;
+
+    if (runtimeConfig.auth.enabled) {
+      const token = typeof window !== 'undefined'
+        ? window.localStorage.getItem(runtimeConfig.auth.tokenStorageKey)
+        : null;
+
+      if (token && token.trim().length > 0) {
+        config.headers[runtimeConfig.auth.tokenHeader] = token;
+      }
+    }
+
+    appLogger.debug(
+      `[API Request] ${config.method?.toUpperCase()} ${config.url} requestId=${requestId}`
+    );
     return config;
   },
   (error) => {
@@ -25,6 +56,12 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => {
     const apiResponse = response.data as ApiResponse<unknown>;
+    const requestId = (response.headers?.[REQUEST_ID_HEADER.toLowerCase()] as string | undefined)
+      || apiResponse.requestId;
+
+    appLogger.debug(
+      `[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} status=${response.status} requestId=${requestId}`
+    );
     
     // 如果后端返回了 error，转换为错误
     if (apiResponse.error) {
@@ -67,7 +104,7 @@ apiClient.interceptors.response.use(
       };
     }
     
-    console.error('[API Error]', apiError);
+    appLogger.error('[API Error]', apiError);
     return Promise.reject(apiError);
   }
 );

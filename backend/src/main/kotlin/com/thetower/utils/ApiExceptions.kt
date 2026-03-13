@@ -20,5 +20,8 @@ class TemplateNotFoundException(message: String) :
 class RunNotFoundException(message: String) :
     ApiException(HttpStatusCode.NotFound, ErrorCodes.RUN_NOT_FOUND, message)
 
+class RunExecutionException(message: String) :
+    ApiException(HttpStatusCode.BadGateway, ErrorCodes.EXECUTION_ERROR, message)
+
 class ConflictException(message: String) :
     ApiException(HttpStatusCode.Conflict, ErrorCodes.TEMPLATE_CONFLICT, message)

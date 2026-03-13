@@ -16,7 +16,7 @@
 6. 后端开发
 7. 后端接口自动化测试：`test/${version-code}/backend-test.py`
 8. 前端开发
-9. 前端测试（按测试计划执行）
+9. 前端测试
 10. 黑盒功能测试（按测试计划执行）
 11. 缺陷修复
 12. 版本总结：`report/${version-code}/result.md`

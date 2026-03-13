@@ -7,7 +7,7 @@ $tplBody = @{
   description='ws test'
   schemaVersion='0.0.1'
   steps=@(
-    @{id='ws-step-1';type='openUrl';position=@{x=1;y=1};data=@{label='open';config=@{url='https://example.com'}}},
+    @{id='ws-step-1';type='openUrl';position=@{x=1;y=1};data=@{label='open';config=@{url='data:text/html,<html><body><h1>WS Test</h1></body></html>'}}},
     @{id='ws-step-2';type='extract';position=@{x=2;y=2};data=@{label='extract';config=@{selector='h1';as='title';mode='text'}}}
   )
   otherStep=@{nodes=@();edges=@()}
@@ -23,16 +23,20 @@ $wsUrl = "$wsBase$($runStart.data.wsUrl)"
 
 $client = [System.Net.WebSockets.ClientWebSocket]::new()
 $uri = [System.Uri]::new($wsUrl)
-$client.ConnectAsync($uri, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+$null = $client.ConnectAsync($uri, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
 
 $buffer = New-Object byte[] 4096
 $messages = New-Object System.Collections.Generic.List[object]
-$deadline = (Get-Date).AddSeconds(8)
+$deadline = (Get-Date).AddSeconds(20)
 
 while ((Get-Date) -lt $deadline -and $client.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
   $segment = [System.ArraySegment[byte]]::new($buffer)
-  $receiveTask = $client.ReceiveAsync($segment, [Threading.CancellationToken]::None)
-  if (-not $receiveTask.Wait(1000)) { continue }
+  try {
+    $receiveTask = $client.ReceiveAsync($segment, [Threading.CancellationToken]::None)
+    if (-not $receiveTask.Wait(1000)) { continue }
+  } catch {
+    break
+  }
 
   $result = $receiveTask.Result
   if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
@@ -46,7 +50,7 @@ while ((Get-Date) -lt $deadline -and $client.State -eq [System.Net.WebSockets.We
 }
 
 if ($client.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-  $client.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'done', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+  $null = $client.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'done', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
 }
 $client.Dispose()
 

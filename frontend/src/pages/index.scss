@@ -1,0 +1,45 @@
+.home-page {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.home-page__header {
+  margin-bottom: 24px;
+}
+
+.home-page__actions {
+  margin-bottom: 24px;
+}
+
+.home-page__error-box {
+  margin-bottom: 16px;
+  padding: 16px;
+  background-color: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
+  border-radius: 6px;
+}
+
+.home-page__danger-text {
+  color: var(--color-danger-text);
+}
+
+.home-page__card-title {
+  font-size: 16px;
+}
+
+.home-page__card-desc {
+  width: 100%;
+}
+
+.home-page__card-paragraph {
+  margin-bottom: 0;
+  min-height: 44px;
+}
+
+.home-page__card-time {
+  font-size: 12px;
+}
+
+.template-card {
+  height: 100%;
+}

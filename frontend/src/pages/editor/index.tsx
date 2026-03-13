@@ -42,9 +42,11 @@ import NodeConfigPanel from '@/components/NodeConfigPanel';
 import RunPanel from '@/components/RunPanel';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
+import { appLogger, buildWsUrl } from '@/config/runtime';
 import { validateCanvas } from '@/utils/validator';
 import type { NodeType } from '@/stores/editorStore';
 import type { RunEvent } from '@/stores/runStore';
+import './index.scss';
 
 // 画布编辑区域
 const FlowEditorInner: React.FC = observer(() => {
@@ -116,16 +118,7 @@ const FlowEditorInner: React.FC = observer(() => {
   }, []);
 
   return (
-    <div 
-      ref={reactFlowWrapper} 
-      style={{ 
-        width: '100%', 
-        height: '100%',
-        position: 'absolute',
-        top: 0,
-        left: 0,
-      }}
-    >
+    <div ref={reactFlowWrapper} className="editor-flow-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -142,7 +135,7 @@ const FlowEditorInner: React.FC = observer(() => {
         fitView
         fitViewOptions={{ padding: 0.2 }}
         deleteKeyCode={['Delete', 'Backspace']}
-        style={{ background: '#f8f9fa' }}
+        className="editor-flow"
       >
         <Background gap={16} size={1} color="#e9ecef" />
         <Controls />
@@ -150,7 +143,7 @@ const FlowEditorInner: React.FC = observer(() => {
           nodeStrokeWidth={3} 
           zoomable 
           pannable 
-          style={{ background: '#fff' }}
+          className="editor-flow-minimap"
         />
       </ReactFlow>
     </div>
@@ -175,7 +168,7 @@ const NodeLibrary: React.FC = () => {
     <Card 
       title="节点库" 
       size="small" 
-      style={{ width: 200 }} 
+      className="editor-node-library"
       styles={{ body: { padding: 12 } }}
     >
       <Flex vertical gap="small">
@@ -184,24 +177,16 @@ const NodeLibrary: React.FC = () => {
             key={nodeType.type}
             draggable
             onDragStart={(e) => onDragStart(e, nodeType.type)}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 6,
-              border: `1px solid ${nodeType.color}40`,
-              background: `${nodeType.color}10`,
-              cursor: 'grab',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
+            className="editor-node-library__item"
+            style={{ '--node-color': nodeType.color } as React.CSSProperties}
           >
-            <span style={{ fontSize: 20 }}>{nodeType.icon}</span>
-            <span style={{ fontSize: 13 }}>{nodeType.label}</span>
+            <span className="editor-node-library__icon">{nodeType.icon}</span>
+            <span className="editor-node-library__label">{nodeType.label}</span>
           </div>
         ))}
       </Flex>
-      <Divider style={{ margin: '12px 0' }} />
-      <div style={{ fontSize: 12, color: '#999' }}>拖拽节点到画布中添加</div>
+      <Divider className="editor-node-library__divider" />
+      <div className="editor-node-library__hint">拖拽节点到画布中添加</div>
     </Card>
   );
 };
@@ -216,13 +201,14 @@ const EditorPage: React.FC = observer(() => {
   useBeforeUnload(editorStore.isDirty);
 
   // WebSocket 连接
-  const wsUrl = runStore.wsUrl ? `ws://localhost:8080${runStore.wsUrl}` : null;
+  const wsUrl = runStore.wsUrl ? buildWsUrl(runStore.wsUrl) : null;
   const { disconnect } = useWebSocket(wsUrl, {
+    key: runStore.currentRun?.id || runStore.wsUrl || 'editor-run',
     onMessage: (data: RunEvent) => {
       runStore.handleEvent(data);
     },
     onClose: () => {
-      console.log('[Editor] WebSocket closed');
+      appLogger.info('[Editor] WebSocket closed');
     },
   });
 
@@ -328,24 +314,16 @@ const EditorPage: React.FC = observer(() => {
   }, []);
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="editor-page">
       {/* 顶部工具栏 */}
-      <div style={{ 
-        padding: '12px 24px', 
-        background: '#fff', 
-        borderBottom: '1px solid #f0f0f0',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexShrink: 0,
-      }}>
+      <div className="editor-toolbar">
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
             返回
           </Button>
-          <span style={{ fontSize: 16, fontWeight: 500 }}>
+          <span className="editor-toolbar__title">
             {editorStore.templateName || '未命名模板'}
-            {editorStore.isDirty && <span style={{ color: '#faad14' }}> *</span>}
+            {editorStore.isDirty && <span className="editor-toolbar__dirty"> *</span>}
           </span>
         </Space>
 
@@ -397,43 +375,21 @@ const EditorPage: React.FC = observer(() => {
           type="error"
           closable
           onClose={() => editorStore.setError(null)}
-          style={{ flexShrink: 0 }}
+          className="editor-alert"
         />
       )}
 
       {/* 主内容区 */}
-      <div style={{ 
-        flex: 1, 
-        display: 'flex', 
-        overflow: 'hidden',
-        position: 'relative',
-      }}>
+      <div className="editor-main">
         {/* 左侧节点库 */}
-        <div style={{ 
-          width: 220, 
-          padding: 16, 
-          background: '#fafafa',
-          borderRight: '1px solid #f0f0f0',
-          overflow: 'auto',
-          flexShrink: 0,
-        }}>
+        <div className="editor-main__left">
           <NodeLibrary />
         </div>
 
         {/* 中间画布 */}
-        <div style={{ 
-          flex: 1, 
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
+        <div className="editor-main__center">
           {editorStore.loading ? (
-            <div style={{ 
-              width: '100%', 
-              height: '100%', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center' 
-            }}>
+            <div className="editor-main__loading">
               <Spin size="large" tip="加载中..." />
             </div>
           ) : (
@@ -442,14 +398,7 @@ const EditorPage: React.FC = observer(() => {
         </div>
 
         {/* 右侧属性面板 */}
-        <div style={{ 
-          width: 320, 
-          padding: 16, 
-          background: '#fafafa',
-          borderLeft: '1px solid #f0f0f0',
-          overflow: 'auto',
-          flexShrink: 0,
-        }}>
+        <div className="editor-main__right">
           {runPanelVisible ? (
             <RunPanel onClose={() => setRunPanelVisible(false)} />
           ) : (

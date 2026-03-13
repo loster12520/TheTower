@@ -1,0 +1,23 @@
+﻿{
+    "runId":  "0647487c-0526-49fe-9761-ca7e7f2d8462",
+    "templateId":  "4e4c6c21-9499-4e41-8a88-61063e095993",
+    "wsUrl":  "ws://localhost:8080/ws/v1/runs/0647487c-0526-49fe-9761-ca7e7f2d8462",
+    "messageCount":  8,
+    "eventTypes":  [
+                       "RUN_STARTED",
+                       "STEP_STARTED",
+                       "LOG",
+                       "STEP_SUCCEEDED",
+                       "STEP_STARTED",
+                       "LOG",
+                       "STEP_SUCCEEDED",
+                       "RUN_SUCCEEDED"
+                   ],
+    "checks":  {
+                   "hasRunStarted":  true,
+                   "hasStepStarted":  true,
+                   "hasTerminalEvent":  true,
+                   "seqStrictlyIncreasing":  true
+               }
+}
+

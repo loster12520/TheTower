@@ -11,6 +11,8 @@
 - [6. 预期改动文件清单](#6-预期改动文件清单)
 - [7. 风险与控制策略](#7-风险与控制策略)
 - [8. 阶段交付与完成判定](#8-阶段交付与完成判定)
+- [9. 前端阶段进展（本轮）](#9-前端阶段进展本轮)
+- [10. 后端回归结果（本轮）](#10-后端回归结果本轮)
 
 ---
 
@@ -267,5 +269,51 @@ class WebSocketManager {
 - 前端配置中心、请求层、WS 层已接入主链路。
 - SQLite + Jimmer 完成核心 CRUD，并具备迁移能力。
 - 复杂度/长度/注释等门禁可自动化检查。
+
+---
+
+## 9. 前端阶段进展（本轮）
+
+### 9.1 已完成项
+- 已新增运行时配置中心：统一管理 `apiBaseUrl`、`wsBaseUrl`、鉴权开关与日志等级。
+- 已升级统一请求层：请求注入 `X-Request-Id`，支持按配置注入 token/header，并统一错误输出。
+- 已新增 WebSocket 单例工厂：按 key 复用连接，并在 hook 层接入自动重连与心跳保活。
+- 编辑页已移除硬编码 `ws://localhost:8080`，改为统一 URL 构建函数。
+- 开发代理已补齐 `/ws` 转发，支持本地联调。
+- 已新增 UI 主题状态管理：支持 light/dark 切换并持久化。
+- 已新增全局主题变量与布局 SCSS，布局内联样式完成第一批迁移。
+
+### 9.2 本轮验证
+- `frontend` 构建已通过（`npm run build`）。
+- 代码诊断无错误（workspace 前端目录）。
+
+### 9.3 对应改动文件
+- `frontend/src/config/runtime.ts`
+- `frontend/src/services/api.ts`
+- `frontend/src/services/wsFactory.ts`
+- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/src/pages/editor/index.tsx`
+- `frontend/src/stores/runStore.ts`
+- `frontend/.umirc.ts`
+- `frontend/src/stores/uiStore.ts`
+- `frontend/src/styles/theme.scss`
+- `frontend/src/layouts/index.scss`
+- `frontend/src/layouts/index.tsx`
+- `frontend/src/app.tsx`
+
+## 10. 后端回归结果（本轮）
+
+### 10.1 基线结果
+- Jimmer 持久化已接入 `TemplateRepository/RunRepository` 主链路，编译通过。
+- 后端 API 冒烟脚本通过率：`15/15`。
+- WS 事件脚本重跑通过，成功样本 `messageCount=8` 且包含 `RUN_SUCCEEDED`。
+
+### 10.2 结果文件
+- `report/0.0.2/backend-api-test-output.json`
+- `report/0.0.2/backend-ws-test-output.json`
+
+### 10.3 已知限制与处理
+- 已处理脚本稳定性：`backend/scripts/ws-event-test.ps1` 增加接收循环容错，避免异常直接中断。
+- 通过重复回归确认：网络与浏览器环境稳定时，WS 终态事件可完整观测。
 
 总结：0.0.2 技术方案以“规范先行、入口统一、存储升级、质量可验”为核心，确保项目从 MVP 走向可持续迭代。

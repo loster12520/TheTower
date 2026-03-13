@@ -1,5 +1,7 @@
 package com.thetower.config
 
+import com.thetower.executor.PlaywrightExecutorConfig
+import com.thetower.executor.PlaywrightRunExecutor
 import com.thetower.routes.healthRoutes
 import com.thetower.routes.runRoutes
 import com.thetower.routes.templateRoutes
@@ -65,7 +67,31 @@ fun Application.configureRouting() {
     val templateRepository = TemplateRepository(effectiveSqliteConfig)
     val runRepository = RunRepository(effectiveSqliteConfig)
     val templateService = TemplateService(templateRepository)
-    val runService = RunService(runRepository, templateService)
+
+    val browser = environment.config
+        .propertyOrNull("thetower.executor.playwright.browser")
+        ?.getString()
+        ?: "chromium"
+    val headless = environment.config
+        .propertyOrNull("thetower.executor.playwright.headless")
+        ?.getString()
+        ?.toBooleanStrictOrNull()
+        ?: true
+    val timeoutMs = environment.config
+        .propertyOrNull("thetower.executor.playwright.defaultTimeoutMs")
+        ?.getString()
+        ?.toDoubleOrNull()
+        ?: 10000.0
+
+    val playwrightExecutor = PlaywrightRunExecutor(
+        PlaywrightExecutorConfig(
+            browser = browser,
+            headless = headless,
+            defaultTimeoutMs = timeoutMs
+        )
+    )
+
+    val runService = RunService(runRepository, templateService, playwrightExecutor)
 
     // JSON 序列化
     install(ContentNegotiation) {

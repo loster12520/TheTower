@@ -1,5 +1,6 @@
 package com.thetower.services
 
+import com.thetower.executor.PlaywrightRunExecutor
 import com.thetower.models.EventType
 import com.thetower.models.LastRun
 import com.thetower.models.Run
@@ -20,21 +21,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 class RunService(
     private val runRepository: RunRepository,
-    private val templateService: TemplateService
+    private val templateService: TemplateService,
+    private val playwrightExecutor: PlaywrightRunExecutor
 ) {
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -177,53 +177,52 @@ class RunService(
             }
 
             val template = templateService.getTemplateById(templateId)
-            for (step in template.steps) {
-                val current = getRunById(runId)
-                if (current.status == RunStatus.CANCELED) {
-                    return
-                }
 
-                persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
-                emit(
-                    runId,
-                    EventType.STEP_STARTED,
-                    buildJsonObject {
-                        put("stepId", JsonPrimitive(step.id))
-                        put("stepType", JsonPrimitive(step.type))
-                    }
-                )
-
-                emit(
-                    runId,
-                    EventType.LOG,
-                    buildJsonObject {
-                        put("level", JsonPrimitive("INFO"))
-                        put("message", JsonPrimitive("执行步骤 ${step.data.label}"))
-                    }
-                )
-
-                delay(300)
-
-                if (step.type !in setOf("openUrl", "click", "type", "waitFor", "extract")) {
-                    throw BadRequestException("不支持的步骤类型: ${step.type}")
-                }
-
-                val outputs = buildJsonObject {
-                    if (step.type == "extract") {
-                        val asVar = step.data.config["as"]?.jsonPrimitive?.contentOrNull
-                        if (!asVar.isNullOrBlank()) {
-                            put(asVar, JsonPrimitive("mock-value"))
+            withContext(Dispatchers.IO) {
+                playwrightExecutor.withPage { page ->
+                    for (step in template.steps) {
+                        val current = getRunById(runId)
+                        if (current.status == RunStatus.CANCELED) {
+                            return@withPage
                         }
+
+                        persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
+                        emit(
+                            runId,
+                            EventType.STEP_STARTED,
+                            buildJsonObject {
+                                put("stepId", JsonPrimitive(step.id))
+                                put("stepType", JsonPrimitive(step.type))
+                            }
+                        )
+
+                        emit(
+                            runId,
+                            EventType.LOG,
+                            buildJsonObject {
+                                put("level", JsonPrimitive("INFO"))
+                                put("message", JsonPrimitive("执行步骤 ${step.data.label}"))
+                            }
+                        )
+
+                        val outputs = playwrightExecutor.executeStep(page, step)
+                        emit(
+                            runId,
+                            EventType.STEP_SUCCEEDED,
+                            buildJsonObject {
+                                put("stepId", JsonPrimitive(step.id))
+                                put(
+                                    "outputs",
+                                    buildJsonObject {
+                                        outputs.forEach { (key, value) ->
+                                            put(key, JsonPrimitive(value))
+                                        }
+                                    }
+                                )
+                            }
+                        )
                     }
                 }
-                emit(
-                    runId,
-                    EventType.STEP_SUCCEEDED,
-                    buildJsonObject {
-                        put("stepId", JsonPrimitive(step.id))
-                        put("outputs", outputs)
-                    }
-                )
             }
 
             val succeeded = getRunById(runId).copy(
@@ -253,7 +252,11 @@ class RunService(
                 finishedAt = nowIso(),
                 currentStepId = null,
                 error = RunError(
-                    code = if (ex is BadRequestException) ex.code else ErrorCodes.INTERNAL_ERROR,
+                    code = when (ex) {
+                        is BadRequestException -> ex.code
+                        is com.thetower.utils.ApiException -> ex.code
+                        else -> ErrorCodes.INTERNAL_ERROR
+                    },
                     message = ex.message ?: "执行失败"
                 )
             )

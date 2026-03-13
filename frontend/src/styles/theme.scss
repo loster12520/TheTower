@@ -1,0 +1,39 @@
+:root {
+  --tt-bg-app: #f3f5f8;
+  --tt-bg-header: #0f1726;
+  --tt-bg-surface: #ffffff;
+  --tt-text-main: #1f2633;
+  --tt-text-muted: #8390a5;
+  --tt-text-inverse: #f7f9ff;
+  --tt-border: #d8dee8;
+
+  --color-bg-page: var(--tt-bg-app);
+  --color-surface: var(--tt-bg-surface);
+  --color-panel-bg: #f8fafc;
+  --color-canvas-bg: #eef2f7;
+  --color-border: var(--tt-border);
+  --color-text-tertiary: var(--tt-text-muted);
+  --color-danger-bg: #fff2f0;
+  --color-danger-border: #ffccc7;
+  --color-danger-text: #ff4d4f;
+}
+
+:root[data-theme='dark'] {
+  --tt-bg-app: #0f131b;
+  --tt-bg-header: #111827;
+  --tt-bg-surface: #161d28;
+  --tt-text-main: #e4eaf3;
+  --tt-text-muted: #9ba8bc;
+  --tt-text-inverse: #f6f8ff;
+  --tt-border: #2a3444;
+
+  --color-bg-page: var(--tt-bg-app);
+  --color-surface: var(--tt-bg-surface);
+  --color-panel-bg: #1a2230;
+  --color-canvas-bg: #151c27;
+  --color-border: var(--tt-border);
+  --color-text-tertiary: var(--tt-text-muted);
+  --color-danger-bg: #3a1719;
+  --color-danger-border: #7d3033;
+  --color-danger-text: #ff8a86;
+}

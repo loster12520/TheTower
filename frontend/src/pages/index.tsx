@@ -29,6 +29,7 @@ import {
 import { history } from 'umi';
 import { templateStore } from '@/stores/templateStore';
 import type { TemplateListItem } from '@/stores/templateStore';
+import './index.scss';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -116,7 +117,6 @@ const HomePage: React.FC = observer(() => {
     <Card
       hoverable
       className="template-card"
-      style={{ height: '100%' }}
       actions={[
         <Button
           key="edit"
@@ -170,7 +170,7 @@ const HomePage: React.FC = observer(() => {
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
                   >
-                    <span style={{ color: '#ff4d4f' }}>删除</span>
+                    <span className="home-page__danger-text">删除</span>
                   </Popconfirm>
                 )
               }
@@ -187,15 +187,15 @@ const HomePage: React.FC = observer(() => {
         title={
           <Space>
             <FileTextOutlined />
-            <Text strong style={{ fontSize: 16 }}>{template.name}</Text>
+            <Text strong className="home-page__card-title">{template.name}</Text>
           </Space>
         }
         description={
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size="small" className="home-page__card-desc">
             <Paragraph
               type="secondary"
               ellipsis={{ rows: 2 }}
-              style={{ marginBottom: 0, minHeight: 44 }}
+              className="home-page__card-paragraph"
             >
               {template.description || '暂无描述'}
             </Paragraph>
@@ -209,7 +209,7 @@ const HomePage: React.FC = observer(() => {
               )}
             </Space>
             
-            <Text type="secondary" style={{ fontSize: 12 }}>
+            <Text type="secondary" className="home-page__card-time">
               更新于: {new Date(template.updatedAt).toLocaleString()}
             </Text>
           </Space>
@@ -219,15 +219,15 @@ const HomePage: React.FC = observer(() => {
   );
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+    <div className="home-page">
       {/* 页面标题 */}
-      <div style={{ marginBottom: 24 }}>
+      <div className="home-page__header">
         <Title level={2}>工作流模板</Title>
         <Text type="secondary">管理和运行您的浏览器自动化工作流</Text>
       </div>
 
       {/* 操作栏 */}
-      <Space style={{ marginBottom: 24 }}>
+      <Space className="home-page__actions">
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -247,7 +247,7 @@ const HomePage: React.FC = observer(() => {
 
       {/* 错误提示 */}
       {templateStore.error && (
-        <div style={{ marginBottom: 16, padding: 16, backgroundColor: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 4 }}>
+        <div className="home-page__error-box">
           <Text type="danger">{templateStore.error}</Text>
           <Button type="link" onClick={() => templateStore.fetchTemplates()}>重试</Button>
         </div>

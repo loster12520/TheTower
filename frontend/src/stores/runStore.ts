@@ -15,6 +15,7 @@ export type EventType =
 
 export interface RunEvent {
   runId: string;
+  requestId?: string | null;
   seq: number;
   ts: string;
   type: EventType;

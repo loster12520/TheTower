@@ -1,0 +1,115 @@
+.editor-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-page);
+}
+
+.editor-toolbar {
+  padding: 12px 24px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.editor-toolbar__title {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.editor-toolbar__dirty {
+  color: #faad14;
+}
+
+.editor-alert {
+  flex-shrink: 0;
+}
+
+.editor-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-main__left {
+  width: 220px;
+  padding: 16px;
+  background: var(--color-panel-bg);
+  border-right: 1px solid var(--color-border);
+  overflow: auto;
+  flex-shrink: 0;
+}
+
+.editor-main__center {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.editor-main__right {
+  width: 320px;
+  padding: 16px;
+  background: var(--color-panel-bg);
+  border-left: 1px solid var(--color-border);
+  overflow: auto;
+  flex-shrink: 0;
+}
+
+.editor-main__loading {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-flow-canvas {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+.editor-flow {
+  background: var(--color-canvas-bg);
+}
+
+.editor-flow-minimap {
+  background: var(--color-surface);
+}
+
+.editor-node-library {
+  width: 200px;
+}
+
+.editor-node-library__item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--node-color) 28%, transparent);
+  background: color-mix(in srgb, var(--node-color) 10%, transparent);
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-node-library__icon {
+  font-size: 20px;
+}
+
+.editor-node-library__label {
+  font-size: 13px;
+}
+
+.editor-node-library__divider {
+  margin: 12px 0;
+}
+
+.editor-node-library__hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}

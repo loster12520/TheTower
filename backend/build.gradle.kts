@@ -1,9 +1,12 @@
 plugins {
-    kotlin("jvm") version "2.3.0"
-    kotlin("plugin.serialization") version "2.3.0"
+    kotlin("jvm") version "2.2.20"
+    kotlin("plugin.serialization") version "2.2.20"
+    id("com.google.devtools.ksp") version "2.2.20-2.0.3"
     id("io.ktor.plugin") version "2.3.12"
     application
 }
+
+val jimmerVersion = "latest.release"
 
 group = "com.thetower"
 version = "0.0.1"
@@ -28,16 +31,24 @@ dependencies {
     // Playwright
     implementation("com.microsoft.playwright:playwright:1.49.0")
 
+    // Jimmer
+    implementation("org.babyfish.jimmer:jimmer-core:$jimmerVersion")
+    implementation("org.babyfish.jimmer:jimmer-sql-kotlin:$jimmerVersion")
+    ksp("org.babyfish.jimmer:jimmer-ksp:$jimmerVersion")
+
     // SQLite
     implementation("org.xerial:sqlite-jdbc:3.46.1.3")
     
     // Logging
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
     implementation("ch.qos.logback:logback-classic:1.5.12")
+    implementation("com.fasterxml.jackson.core:jackson-annotations:2.17.2")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     
     // Test
     testImplementation("io.ktor:ktor-server-tests:2.3.12")
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.3.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.20")
 }
 
 application {
@@ -46,4 +57,10 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+kotlin {
+    sourceSets.main {
+        kotlin.srcDir("build/generated/ksp/main/kotlin")
+    }
 }
