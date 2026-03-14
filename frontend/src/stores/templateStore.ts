@@ -98,6 +98,87 @@ class TemplateStore {
     }
   }
 
+  // 获取模板详情（用于导出/导入后的校验等）
+  async getTemplateById(id: string): Promise<WorkflowTemplate | null> {
+    try {
+      const response = await templateApi.get(id);
+      return response.data;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '获取模板详情失败');
+      return null;
+    }
+  }
+
+  // 导入模板（从导出的 JSON 结构落库）
+  async importTemplateFromJson(raw: unknown): Promise<string | null> {
+    this.setError(null);
+
+    // 最小校验：只支持当前线性流程 schemaVersion
+    if (!raw || typeof raw !== 'object') {
+      this.setError('导入失败：文件内容不是合法 JSON 对象');
+      return null;
+    }
+
+    const obj = raw as Record<string, unknown>;
+    const name = obj.name;
+    const description = obj.description;
+    const schemaVersion = obj.schemaVersion;
+    const steps = obj.steps;
+    const otherStep = obj.otherStep;
+
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      this.setError('导入失败：缺少 name');
+      return null;
+    }
+
+    if (schemaVersion !== '0.0.1') {
+      this.setError(`导入失败：不支持的 schemaVersion（当前仅支持 0.0.1），实际为 ${String(schemaVersion)}`);
+      return null;
+    }
+
+    if (!Array.isArray(steps)) {
+      this.setError('导入失败：steps 必须为数组');
+      return null;
+    }
+
+    const safeOtherStep = ((): { nodes: unknown[]; edges: unknown[] } => {
+      if (!otherStep || typeof otherStep !== 'object') {
+        return { nodes: [], edges: [] };
+      }
+      const other = otherStep as Record<string, unknown>;
+      return {
+        nodes: Array.isArray(other.nodes) ? (other.nodes as unknown[]) : [],
+        edges: Array.isArray(other.edges) ? (other.edges as unknown[]) : [],
+      };
+    })();
+
+    try {
+      // 先创建模板以获取新的 id
+      const created = await templateApi.create({
+        name: name.trim(),
+        description: typeof description === 'string' ? description : null,
+        schemaVersion: '0.0.1',
+        steps: [],
+        otherStep: { nodes: [], edges: [] },
+      });
+
+      // 再落库 steps/otherStep
+      await templateApi.saveSteps(created.data.id, {
+        schemaVersion: '0.0.1',
+        steps,
+        otherStep: safeOtherStep,
+      });
+
+      await this.fetchTemplates();
+      return created.data.id;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '导入模板失败');
+      return null;
+    }
+  }
+
   // 设置状态
   setLoading(loading: boolean) {
     this.loading = loading;

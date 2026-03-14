@@ -31,6 +31,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.websocket.*
 import kotlinx.serialization.json.Json
+import java.time.Duration
 import kotlin.time.DurationUnit
 import kotlin.time.TimeSource
 
@@ -113,7 +114,11 @@ fun Application.configureRouting() {
         allowMethod(HttpMethod.Delete)
     }
 
-    install(WebSockets)
+    install(WebSockets) {
+        pingPeriod = Duration.ofSeconds(15)
+        timeout = Duration.ofSeconds(60)
+        maxFrameSize = 1_048_576 // 1MB
+    }
 
     intercept(ApplicationCallPipeline.Setup) {
         val requestId = call.request.headers[REQUEST_ID_HEADER]

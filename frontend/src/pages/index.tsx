@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import {
   Card,
@@ -37,6 +37,26 @@ const HomePage: React.FC = observer(() => {
   // 表单实例
   const [createForm] = Form.useForm();
   const [renameForm] = Form.useForm();
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const downloadJson = (fileName: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const safeFileName = (name: string) =>
+    name
+      .replace(/[\\/:*?"<>|\u0000-\u001F]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
 
   // 组件挂载时加载数据
   useEffect(() => {
@@ -92,14 +112,40 @@ const HomePage: React.FC = observer(() => {
 
   // 处理导入
   const handleImport = () => {
-    // TODO: 实现导入功能
-    message.info('导入功能开发中...');
+    importFileInputRef.current?.click();
   };
 
   // 处理导出
-  const handleExport = (template: TemplateListItem) => {
-    // TODO: 实现导出功能
-    message.info('导出功能开发中...');
+  const handleExport = async (template: TemplateListItem) => {
+    const full = await templateStore.getTemplateById(template.id);
+    if (!full) {
+      message.error(templateStore.error || '导出失败');
+      return;
+    }
+
+    const fileName = `${safeFileName(full.name)}-${full.id.slice(-8)}.json`;
+    downloadJson(fileName, full);
+    message.success('导出成功');
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 允许重复选择同一个文件
+
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text) as unknown;
+
+      const id = await templateStore.importTemplateFromJson(json);
+      if (id) {
+        message.success('导入成功');
+      } else {
+        message.error(templateStore.error || '导入失败');
+      }
+    } catch (err) {
+      message.error('导入失败：文件解析失败，请确认是合法 JSON');
+    }
   };
 
   // 打开重命名对话框
@@ -220,6 +266,14 @@ const HomePage: React.FC = observer(() => {
 
   return (
     <div className="home-page">
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept="application/json"
+        style={{ display: 'none' }}
+        onChange={handleImportFileChange}
+      />
+
       {/* 页面标题 */}
       <div className="home-page__header">
         <Title level={2}>工作流模板</Title>

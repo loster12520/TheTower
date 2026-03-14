@@ -7,5 +7,11 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:8000',
     headless: true,
   },
+  webServer: {
+    command: 'npm run dev',
+    url: 'http://127.0.0.1:8000',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
   reporter: 'list',
 });

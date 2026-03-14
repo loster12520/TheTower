@@ -2,13 +2,14 @@ $ErrorActionPreference='Stop'
 $base='http://localhost:8080/api/v1'
 $wsBase='ws://localhost:8080'
 
+# 构造一个必失败步骤：click 不存在的元素（等待超时后失败）
 $tplBody = @{
-  name='ws-test-template'
-  description='ws test'
+  name='ws-step-failed-template'
+  description='ws step failed test'
   schemaVersion='0.0.1'
   steps=@(
-    @{id='ws-step-1';type='openUrl';position=@{x=1;y=1};data=@{label='open';config=@{url='data:text/html,<html><body><h1>WS Test</h1></body></html>'}}},
-    @{id='ws-step-2';type='extract';position=@{x=2;y=2};data=@{label='extract';config=@{selector='h1';as='title';mode='text'}}}
+    @{id='ws-step-1';type='openUrl';position=@{x=1;y=1};data=@{label='open';config=@{url='data:text/html,<html><body><h1>WS Fail</h1></body></html>'}}},
+    @{id='ws-step-2';type='click';position=@{x=2;y=2};data=@{label='click-missing';config=@{selector='#not-exist'}}}
   )
   otherStep=@{nodes=@();edges=@()}
 } | ConvertTo-Json -Depth 15
@@ -27,8 +28,9 @@ $null = $client.ConnectAsync($uri, [Threading.CancellationToken]::None).GetAwait
 
 $buffer = New-Object byte[] 16384
 $messages = New-Object System.Collections.Generic.List[object]
-$deadline = (Get-Date).AddSeconds(20)
+$deadline = (Get-Date).AddSeconds(30)
 $sb = New-Object System.Text.StringBuilder
+$endedBecause = 'deadline'
 $pendingReceive = $null
 $pendingSegment = $null
 
@@ -38,14 +40,16 @@ while ((Get-Date) -lt $deadline -and $client.State -eq [System.Net.WebSockets.We
       $pendingSegment = [System.ArraySegment[byte]]::new($buffer)
       $pendingReceive = $client.ReceiveAsync($pendingSegment, [Threading.CancellationToken]::None)
     }
+
     if (-not $pendingReceive.Wait(1000)) { continue }
+
+    $result = $pendingReceive.Result
+    $pendingReceive = $null
+    $pendingSegment = $null
   } catch {
+    $endedBecause = 'exception'
     break
   }
-
-  $result = $pendingReceive.Result
-  $pendingReceive = $null
-  $pendingSegment = $null
   if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
 
   if ($result.Count -gt 0) {
@@ -60,9 +64,16 @@ while ((Get-Date) -lt $deadline -and $client.State -eq [System.Net.WebSockets.We
     if (-not [string]::IsNullOrWhiteSpace($text)) {
       $obj = $text | ConvertFrom-Json
       $messages.Add($obj) | Out-Null
-      if ($obj.type -in @('RUN_SUCCEEDED','RUN_FAILED','RUN_CANCELED')) { break }
+      if ($obj.type -in @('RUN_SUCCEEDED','RUN_FAILED','RUN_CANCELED')) {
+        $endedBecause = 'terminal-event'
+        break
+      }
     }
   }
+}
+
+if ($client.State -ne [System.Net.WebSockets.WebSocketState]::Open -and $endedBecause -eq 'deadline') {
+  $endedBecause = 'closed'
 }
 
 if ($client.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
@@ -71,30 +82,33 @@ if ($client.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
 $client.Dispose()
 
 $types = @($messages | ForEach-Object { $_.type })
-$hasRunStarted = $types -contains 'RUN_STARTED'
-$hasStepStarted = $types -contains 'STEP_STARTED'
-$hasTerminal = @('RUN_SUCCEEDED','RUN_FAILED','RUN_CANCELED') | Where-Object { $types -contains $_ }
-$seqAsc = $true
-$seqList = @($messages | ForEach-Object { [int64]$_.seq })
-for ($i=1; $i -lt $seqList.Count; $i++) {
-  if ($seqList[$i] -le $seqList[$i-1]) { $seqAsc = $false; break }
-}
+$hasStepFailed = $types -contains 'STEP_FAILED'
+$hasRunFailed = $types -contains 'RUN_FAILED'
+
+$stepFailed = $messages | Where-Object { $_.type -eq 'STEP_FAILED' } | Select-Object -First 1
+$runFailed = $messages | Where-Object { $_.type -eq 'RUN_FAILED' } | Select-Object -First 1
 
 $summary = [pscustomobject]@{
   runId = $runId
   templateId = $tplId
   wsUrl = $wsUrl
+  endedBecause = $endedBecause
+  wsState = $client.State.ToString()
+  closeStatus = if ($client.CloseStatus) { $client.CloseStatus.ToString() } else { $null }
+  closeStatusDescription = $client.CloseStatusDescription
   messageCount = $messages.Count
   eventTypes = $types
   checks = [pscustomobject]@{
-    hasRunStarted = $hasRunStarted
-    hasStepStarted = $hasStepStarted
-    hasTerminalEvent = ($hasTerminal.Count -gt 0)
-    seqStrictlyIncreasing = $seqAsc
+    hasStepFailed = $hasStepFailed
+    hasRunFailed = $hasRunFailed
+  }
+  samples = [pscustomobject]@{
+    stepFailed = $stepFailed
+    runFailed = $runFailed
   }
 }
 
 # 清理模板
 Invoke-RestMethod -Uri "$base/templates/$tplId" -Method Delete | Out-Null
 
-$summary | ConvertTo-Json -Depth 10
+$summary | ConvertTo-Json -Depth 12

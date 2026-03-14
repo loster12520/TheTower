@@ -45,6 +45,11 @@ class RunService(
     private val runByIdCache = TtlCache<String, Run>(ttlMs = 10_000)
     private val runListCache = TtlCache<String, Pair<List<Run>, Int>>(ttlMs = 10_000)
 
+    private fun wsSafeMessage(message: String, limit: Int = 2_000): String {
+        if (message.length <= limit) return message
+        return message.take(limit) + "\n...(truncated, see GET /api/v1/runs/{id})"
+    }
+
     fun startRun(templateId: String, dryRun: Boolean, requestId: String? = null): StartRunData {
         val template = templateService.getTemplateById(templateId)
         if (template.steps.isEmpty() && !dryRun) {
@@ -205,22 +210,48 @@ class RunService(
                             }
                         )
 
-                        val outputs = playwrightExecutor.executeStep(page, step)
-                        emit(
-                            runId,
-                            EventType.STEP_SUCCEEDED,
-                            buildJsonObject {
-                                put("stepId", JsonPrimitive(step.id))
-                                put(
-                                    "outputs",
-                                    buildJsonObject {
-                                        outputs.forEach { (key, value) ->
-                                            put(key, JsonPrimitive(value))
+                        try {
+                            val outputs = playwrightExecutor.executeStep(page, step)
+                            emit(
+                                runId,
+                                EventType.STEP_SUCCEEDED,
+                                buildJsonObject {
+                                    put("stepId", JsonPrimitive(step.id))
+                                    put(
+                                        "outputs",
+                                        buildJsonObject {
+                                            outputs.forEach { (key, value) ->
+                                                put(key, JsonPrimitive(value))
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
+                            )
+                        } catch (ex: CancellationException) {
+                            throw ex
+                        } catch (ex: Exception) {
+                            val code = when (ex) {
+                                is com.thetower.utils.ApiException -> ex.code
+                                else -> ErrorCodes.INTERNAL_ERROR
                             }
-                        )
+                            val message = wsSafeMessage(ex.message ?: "执行失败")
+                            emit(
+                                runId,
+                                EventType.STEP_FAILED,
+                                buildJsonObject {
+                                    put("stepId", JsonPrimitive(step.id))
+                                    put("stepType", JsonPrimitive(step.type))
+                                    put(
+                                        "error",
+                                        buildJsonObject {
+                                            put("code", JsonPrimitive(code))
+                                            put("message", JsonPrimitive(message))
+                                        }
+                                    )
+                                }
+                            )
+                            throw ex
+                        }
                     }
                 }
             }
@@ -269,7 +300,7 @@ class RunService(
                         "error",
                         buildJsonObject {
                             put("code", JsonPrimitive(failed.error?.code ?: ErrorCodes.INTERNAL_ERROR))
-                            put("message", JsonPrimitive(failed.error?.message ?: "执行失败"))
+                            put("message", JsonPrimitive(wsSafeMessage(failed.error?.message ?: "执行失败")))
                         }
                     )
                 }
@@ -294,7 +325,20 @@ class RunService(
             type = type,
             payload = payload
         )
-        flow.tryEmit(event)
+
+        val ok = flow.tryEmit(event)
+        if (!ok) {
+            logger.warn { "event.emit.dropped runId=$runId seq=$seq type=${type.name} (tryEmit=false), fallback to emit" }
+            scope.launch {
+                runCatching {
+                    flow.emit(event)
+                }.onFailure { ex ->
+                    logger.error(ex) { "event.emit.fallback.failed runId=$runId seq=$seq type=${type.name}" }
+                }
+            }
+        } else {
+            logger.debug { "event.emit.ok runId=$runId seq=$seq type=${type.name}" }
+        }
     }
 
     private fun cleanupRuntime(runId: String) {

@@ -1,0 +1,26 @@
+{
+  "name": "导入用例：WS Step Failed",
+  "description": "用于验证 0.0.3 的导入功能与失败事件链",
+  "schemaVersion": "0.0.1",
+  "steps": [
+    {
+      "id": "imp-step-1",
+      "type": "openUrl",
+      "position": { "x": 100, "y": 100 },
+      "data": {
+        "label": "打开内联页面",
+        "config": { "url": "data:text/html,<html><body><h1>Import Test</h1></body></html>" }
+      }
+    },
+    {
+      "id": "imp-step-2",
+      "type": "extract",
+      "position": { "x": 100, "y": 200 },
+      "data": {
+        "label": "提取标题",
+        "config": { "selector": "h1", "as": "title", "mode": "text" }
+      }
+    }
+  ],
+  "otherStep": { "nodes": [], "edges": [] }
+}
