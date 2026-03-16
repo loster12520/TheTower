@@ -27,6 +27,7 @@ import {
   Divider,
   Flex,
   Badge,
+  Tag,
 } from 'antd';
 import {
   SaveOutlined,
@@ -51,7 +52,7 @@ import './index.scss';
 // 画布编辑区域
 const FlowEditorInner: React.FC = observer(() => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { project } = useReactFlow();
+  const { screenToFlowPosition } = useReactFlow();
   
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -103,14 +104,13 @@ const FlowEditorInner: React.FC = observer(() => {
     const type = event.dataTransfer.getData('application/reactflow') as NodeType;
     if (!type || !reactFlowWrapper.current) return;
 
-    const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-    const position = project({
-      x: event.clientX - reactFlowBounds.left,
-      y: event.clientY - reactFlowBounds.top,
+    const position = screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
     });
 
     editorStore.addNode(type, position);
-  }, [project]);
+  }, [screenToFlowPosition]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -158,7 +158,7 @@ const FlowEditor: React.FC = () => (
 );
 
 // 节点库
-const NodeLibrary: React.FC = () => {
+const NodeLibrary: React.FC = observer(() => {
   const onDragStart = (event: React.DragEvent, type: NodeType) => {
     event.dataTransfer.setData('application/reactflow', type);
     event.dataTransfer.effectAllowed = 'move';
@@ -172,7 +172,7 @@ const NodeLibrary: React.FC = () => {
       styles={{ body: { padding: 12 } }}
     >
       <Flex vertical gap="small">
-        {NODE_TYPES.map((nodeType) => (
+        {editorStore.availableNodeTypes.map((nodeType) => (
           <div
             key={nodeType.type}
             draggable
@@ -186,10 +186,10 @@ const NodeLibrary: React.FC = () => {
         ))}
       </Flex>
       <Divider className="editor-node-library__divider" />
-      <div className="editor-node-library__hint">拖拽节点到画布中添加</div>
+      <div className="editor-node-library__hint">{editorStore.activeSubflowHint}</div>
     </Card>
   );
-};
+});
 
 // 主页面
 const EditorPage: React.FC = observer(() => {
@@ -325,6 +325,28 @@ const EditorPage: React.FC = observer(() => {
             {editorStore.templateName || '未命名模板'}
             {editorStore.isDirty && <span className="editor-toolbar__dirty"> *</span>}
           </span>
+          <Tag color={editorStore.isEditingSubflow ? 'processing' : 'default'}>
+            {editorStore.canvasScopeLabel}
+          </Tag>
+          {editorStore.isEditingSubflow && editorStore.activeSubflowBranches.map((branch) => (
+            <Button
+              key={branch}
+              size="small"
+              type={editorStore.activeSubflow?.branch === branch ? 'primary' : 'default'}
+              onClick={() => {
+                if (editorStore.activeSubflow) {
+                  editorStore.enterSubflow(editorStore.activeSubflow.nodeId, branch);
+                }
+              }}
+            >
+              {branch.toUpperCase()}
+            </Button>
+          ))}
+          {editorStore.isEditingSubflow && (
+            <Button size="small" onClick={() => editorStore.exitSubflow()}>
+              返回主流程
+            </Button>
+          )}
         </Space>
 
         <Space>
@@ -393,7 +415,34 @@ const EditorPage: React.FC = observer(() => {
               <Spin size="large" tip="加载中..." />
             </div>
           ) : (
-            <FlowEditor />
+            <>
+              {editorStore.isEditingSubflow && (
+                <div className="editor-subflow-banner">
+                  <Space>
+                    <Tag color="processing">subflow 编辑中</Tag>
+                    <span>{editorStore.canvasScopeLabel}</span>
+                  </Space>
+                </div>
+              )}
+              {editorStore.isEditingSubflow && (
+                <div className="editor-subflow-workbench" data-testid="subflow-workbench">
+                  <div className="editor-subflow-workbench__header">
+                    <div>
+                      <div className="editor-subflow-workbench__title">Subflow 工作台</div>
+                      <div className="editor-subflow-workbench__scope">{editorStore.canvasScopeLabel}</div>
+                    </div>
+                    <Tag color={editorStore.isLoopBodyScope ? 'error' : 'processing'}>
+                      {editorStore.isLoopBodyScope ? '循环 BODY' : '分支编辑'}
+                    </Tag>
+                  </div>
+                  <div className="editor-subflow-workbench__meta">
+                    <span>当前子步骤数 {editorStore.getActiveSubflowStepCount()}</span>
+                    <span>{editorStore.activeSubflowHint}</span>
+                  </div>
+                </div>
+              )}
+              <FlowEditor />
+            </>
           )}
         </div>
 

@@ -75,6 +75,14 @@ const toWsProtocolOrigin = (): string => {
   return `${protocol}//${window.location.host}`;
 };
 
+const resolveWsBaseOrigin = (): string => {
+  if (runtimeConfig.wsBaseUrl.startsWith('ws://') || runtimeConfig.wsBaseUrl.startsWith('wss://')) {
+    const url = new URL(runtimeConfig.wsBaseUrl);
+    return `${url.protocol}//${url.host}`;
+  }
+  return toWsProtocolOrigin();
+};
+
 /**
  * 把后端返回的 ws 路径（如 /ws/v1/runs/xxx）转换为浏览器可连接 URL。
  */
@@ -84,10 +92,13 @@ export const buildWsUrl = (inputPathOrUrl: string): string => {
   }
 
   if (inputPathOrUrl.startsWith('/')) {
-    return `${toWsProtocolOrigin()}${inputPathOrUrl}`;
+    return `${resolveWsBaseOrigin()}${inputPathOrUrl}`;
   }
 
   if (inputPathOrUrl.startsWith('runs/')) {
+    if (runtimeConfig.wsBaseUrl.startsWith('ws://') || runtimeConfig.wsBaseUrl.startsWith('wss://')) {
+      return `${runtimeConfig.wsBaseUrl}/${inputPathOrUrl}`;
+    }
     return `${toWsProtocolOrigin()}${runtimeConfig.wsBaseUrl}/${inputPathOrUrl}`;
   }
 

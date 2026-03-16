@@ -6,7 +6,6 @@ import {
   Button,
   Space,
   Tag,
-  Popconfirm,
   Modal,
   Form,
   Input,
@@ -195,30 +194,36 @@ const HomePage: React.FC = observer(() => {
                 key: 'rename',
                 icon: <EditOutlined />,
                 label: '重命名',
-                onClick: () => openRenameModal(template)
+                onClick: ({ domEvent }) => {
+                  domEvent.stopPropagation();
+                  openRenameModal(template);
+                }
               },
               {
                 key: 'export',
                 icon: <ExportOutlined />,
                 label: '导出',
-                onClick: () => handleExport(template)
+                onClick: ({ domEvent }) => {
+                  domEvent.stopPropagation();
+                  handleExport(template);
+                }
               },
               { type: 'divider' },
               {
                 key: 'delete',
                 icon: <DeleteOutlined />,
-                label: (
-                  <Popconfirm
-                    title="确定要删除这个模板吗？"
-                    description="删除后无法恢复，请谨慎操作。"
-                    onConfirm={() => handleDelete(template)}
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
-                  >
-                    <span className="home-page__danger-text">删除</span>
-                  </Popconfirm>
-                )
+                label: <span className="home-page__danger-text">删除</span>,
+                onClick: ({ domEvent }) => {
+                  domEvent.stopPropagation();
+                  Modal.confirm({
+                    title: '确定要删除这个模板吗？',
+                    content: '删除后无法恢复，请谨慎操作。',
+                    okText: '删除',
+                    cancelText: '取消',
+                    okButtonProps: { danger: true },
+                    onOk: () => handleDelete(template),
+                  });
+                }
               }
             ]
           }}

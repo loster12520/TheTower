@@ -55,7 +55,7 @@ class TemplateStore {
       const response = await templateApi.create({
         name,
         description: description || null,
-        schemaVersion: '0.0.1',
+        schemaVersion: '0.0.4',
         steps: [],
         otherStep: { nodes: [], edges: [] }
       });
@@ -114,7 +114,7 @@ class TemplateStore {
   async importTemplateFromJson(raw: unknown): Promise<string | null> {
     this.setError(null);
 
-    // 最小校验：只支持当前线性流程 schemaVersion
+    // 最小校验：支持 0.0.1 与 0.0.4
     if (!raw || typeof raw !== 'object') {
       this.setError('导入失败：文件内容不是合法 JSON 对象');
       return null;
@@ -132,8 +132,8 @@ class TemplateStore {
       return null;
     }
 
-    if (schemaVersion !== '0.0.1') {
-      this.setError(`导入失败：不支持的 schemaVersion（当前仅支持 0.0.1），实际为 ${String(schemaVersion)}`);
+    if (schemaVersion !== '0.0.1' && schemaVersion !== '0.0.4') {
+      this.setError(`导入失败：不支持的 schemaVersion（当前支持 0.0.1 / 0.0.4），实际为 ${String(schemaVersion)}`);
       return null;
     }
 
@@ -158,14 +158,14 @@ class TemplateStore {
       const created = await templateApi.create({
         name: name.trim(),
         description: typeof description === 'string' ? description : null,
-        schemaVersion: '0.0.1',
+        schemaVersion: schemaVersion as string,
         steps: [],
         otherStep: { nodes: [], edges: [] },
       });
 
       // 再落库 steps/otherStep
       await templateApi.saveSteps(created.data.id, {
-        schemaVersion: '0.0.1',
+        schemaVersion: schemaVersion as string,
         steps,
         otherStep: safeOtherStep,
       });

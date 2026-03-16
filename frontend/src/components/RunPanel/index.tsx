@@ -10,6 +10,7 @@ import {
   Empty,
   Badge,
   Divider,
+  message,
 } from 'antd';
 import { CloseOutlined, SyncOutlined } from '@ant-design/icons';
 import { runStore } from '@/stores/runStore';
@@ -23,6 +24,7 @@ interface RunPanelProps {
 
 const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
   const { currentRun, logs, events, stepStatusMap } = runStore;
+  const latestFailedStepPath = runStore.latestFailedStepPath;
 
   // 获取运行状态标签
   const getStatusBadge = (status: string) => {
@@ -85,6 +87,25 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
               <Text type="secondary">当前步骤: </Text>
               <Text>{runStore.currentStepId ? runStore.currentStepId.slice(-8) : '-'}</Text>
             </div>
+            <div>
+              <Text type="secondary">当前路径: </Text>
+              <Text>{runStore.currentStepPath?.join(' / ') || '-'}</Text>
+            </div>
+            {latestFailedStepPath && (
+              <Button
+                block
+                danger
+                data-testid="locate-failed-step"
+                onClick={() => {
+                  const located = editorStore.focusStepPath(latestFailedStepPath);
+                  if (!located) {
+                    message.warning(editorStore.error || '失败节点定位失败');
+                  }
+                }}
+              >
+                定位失败节点
+              </Button>
+            )}
           </Space>
         </Card>
       )}
@@ -171,7 +192,13 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
                     </Text>
                   </Space>
                   <Text style={{ fontSize: 12 }}>
-                    {JSON.stringify(event.payload).slice(0, 100)}
+                    {(() => {
+                      const payload = event.payload || {};
+                      const stepPath = Array.isArray(payload.stepPath)
+                        ? (payload.stepPath as string[]).join(' / ')
+                        : null;
+                      return stepPath || JSON.stringify(payload).slice(0, 100);
+                    })()}
                   </Text>
                 </Space>
               </List.Item>

@@ -22,9 +22,17 @@ export interface RunEvent {
   payload: Record<string, unknown>;
 }
 
+const normalizeStepPath = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+};
+
+const toPathKey = (stepPath: string[]): string => stepPath.join('/');
+
 // 步骤执行状态
 export interface StepStatus {
   stepId: string;
+  stepPath?: string[];
   status: 'pending' | 'running' | 'succeeded' | 'failed';
   outputs?: Record<string, string>;
   error?: { code: string; message: string };
@@ -46,9 +54,11 @@ class RunStore {
   
   // 步骤状态映射
   stepStatusMap: Map<string, StepStatus> = new Map();
+  stepPathStatusMap: Map<string, StepStatus> = new Map();
   
   // 当前执行到的步骤
   currentStepId: string | null = null;
+  currentStepPath: string[] | null = null;
 
   constructor() {
     makeAutoObservable(this);
@@ -104,27 +114,53 @@ class RunStore {
           break;
 
         case 'STEP_STARTED':
-          this.currentStepId = event.payload.stepId as string;
-          this.stepStatusMap.set(event.payload.stepId as string, {
-            stepId: event.payload.stepId as string,
-            status: 'running',
-          });
+          {
+            const stepId = event.payload.stepId as string;
+            const stepPath = normalizeStepPath(event.payload.stepPath);
+            this.currentStepId = stepId;
+            this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
+            const status: StepStatus = {
+              stepId,
+              stepPath: this.currentStepPath,
+              status: 'running',
+            };
+            this.stepStatusMap.set(stepId, status);
+            this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+          }
           break;
 
         case 'STEP_SUCCEEDED':
-          this.stepStatusMap.set(event.payload.stepId as string, {
-            stepId: event.payload.stepId as string,
-            status: 'succeeded',
-            outputs: event.payload.outputs as Record<string, string>,
-          });
+          {
+            const stepId = event.payload.stepId as string;
+            const stepPath = normalizeStepPath(event.payload.stepPath);
+            this.currentStepId = stepId;
+            this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
+            const status: StepStatus = {
+              stepId,
+              stepPath: this.currentStepPath,
+              status: 'succeeded',
+              outputs: event.payload.outputs as Record<string, string>,
+            };
+            this.stepStatusMap.set(stepId, status);
+            this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+          }
           break;
 
         case 'STEP_FAILED':
-          this.stepStatusMap.set(event.payload.stepId as string, {
-            stepId: event.payload.stepId as string,
-            status: 'failed',
-            error: event.payload.error as { code: string; message: string },
-          });
+          {
+            const stepId = event.payload.stepId as string;
+            const stepPath = normalizeStepPath(event.payload.stepPath);
+            this.currentStepId = stepId;
+            this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
+            const status: StepStatus = {
+              stepId,
+              stepPath: this.currentStepPath,
+              status: 'failed',
+              error: event.payload.error as { code: string; message: string },
+            };
+            this.stepStatusMap.set(stepId, status);
+            this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+          }
           break;
 
         case 'LOG':
@@ -171,13 +207,75 @@ class RunStore {
     this.events = [];
     this.logs = [];
     this.stepStatusMap.clear();
+    this.stepPathStatusMap.clear();
     this.currentStepId = null;
+    this.currentStepPath = null;
     this.error = null;
   }
 
   // 获取步骤状态
   getStepStatus(stepId: string): StepStatus | undefined {
     return this.stepStatusMap.get(stepId);
+  }
+
+  getStepStatusByPath(stepPath: string[]): StepStatus | undefined {
+    return this.stepPathStatusMap.get(toPathKey(stepPath));
+  }
+
+  get latestFailedStepPath(): string[] | null {
+    let fallbackPath: string[] | null = null;
+
+    for (let index = this.events.length - 1; index >= 0; index -= 1) {
+      const event = this.events[index];
+      if (event.type !== 'STEP_FAILED') {
+        continue;
+      }
+
+      const stepPath = normalizeStepPath(event.payload.stepPath);
+      if (stepPath.length > 1) {
+        return stepPath;
+      }
+
+      if (stepPath.length === 1) {
+        fallbackPath = stepPath;
+        continue;
+      }
+
+      if (typeof event.payload.stepId === 'string') {
+        fallbackPath = [event.payload.stepId];
+      }
+    }
+
+    return fallbackPath;
+  }
+
+  getPathAggregateStatus(pathPrefix: string[]): StepStatus['status'] | undefined {
+    const prefix = toPathKey(pathPrefix);
+    let hasSucceeded = false;
+
+    for (const [pathKey, status] of this.stepPathStatusMap.entries()) {
+      if (pathKey === prefix || pathKey.startsWith(`${prefix}/`)) {
+        if (status.status === 'failed') {
+          return 'failed';
+        }
+        if (status.status === 'running') {
+          return 'running';
+        }
+        if (status.status === 'succeeded') {
+          hasSucceeded = true;
+        }
+      }
+    }
+
+    return hasSucceeded ? 'succeeded' : undefined;
+  }
+
+  hasPathFailure(pathPrefix: string[]): boolean {
+    return this.getPathAggregateStatus(pathPrefix) === 'failed';
+  }
+
+  hasPathRunning(pathPrefix: string[]): boolean {
+    return this.getPathAggregateStatus(pathPrefix) === 'running';
   }
 
   // 状态设置器

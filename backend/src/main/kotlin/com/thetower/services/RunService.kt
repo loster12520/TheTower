@@ -25,8 +25,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import com.microsoft.playwright.Page
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -182,77 +187,11 @@ class RunService(
             }
 
             val template = templateService.getTemplateById(templateId)
+            validateStepTree(template.steps)
 
             withContext(Dispatchers.IO) {
                 playwrightExecutor.withPage { page ->
-                    for (step in template.steps) {
-                        val current = getRunById(runId)
-                        if (current.status == RunStatus.CANCELED) {
-                            return@withPage
-                        }
-
-                        persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
-                        emit(
-                            runId,
-                            EventType.STEP_STARTED,
-                            buildJsonObject {
-                                put("stepId", JsonPrimitive(step.id))
-                                put("stepType", JsonPrimitive(step.type))
-                            }
-                        )
-
-                        emit(
-                            runId,
-                            EventType.LOG,
-                            buildJsonObject {
-                                put("level", JsonPrimitive("INFO"))
-                                put("message", JsonPrimitive("执行步骤 ${step.data.label}"))
-                            }
-                        )
-
-                        try {
-                            val outputs = playwrightExecutor.executeStep(page, step)
-                            emit(
-                                runId,
-                                EventType.STEP_SUCCEEDED,
-                                buildJsonObject {
-                                    put("stepId", JsonPrimitive(step.id))
-                                    put(
-                                        "outputs",
-                                        buildJsonObject {
-                                            outputs.forEach { (key, value) ->
-                                                put(key, JsonPrimitive(value))
-                                            }
-                                        }
-                                    )
-                                }
-                            )
-                        } catch (ex: CancellationException) {
-                            throw ex
-                        } catch (ex: Exception) {
-                            val code = when (ex) {
-                                is com.thetower.utils.ApiException -> ex.code
-                                else -> ErrorCodes.INTERNAL_ERROR
-                            }
-                            val message = wsSafeMessage(ex.message ?: "执行失败")
-                            emit(
-                                runId,
-                                EventType.STEP_FAILED,
-                                buildJsonObject {
-                                    put("stepId", JsonPrimitive(step.id))
-                                    put("stepType", JsonPrimitive(step.type))
-                                    put(
-                                        "error",
-                                        buildJsonObject {
-                                            put("code", JsonPrimitive(code))
-                                            put("message", JsonPrimitive(message))
-                                        }
-                                    )
-                                }
-                            )
-                            throw ex
-                        }
-                    }
+                    executeSteps(runId, template.steps, page, mutableMapOf(), emptyList(), loopDepth = 0)
                 }
             }
 
@@ -312,6 +251,173 @@ class RunService(
         } finally {
             runningJobs.remove(runId)
         }
+    }
+
+    private fun executeSteps(
+        runId: String,
+        steps: List<com.thetower.models.StepNode>,
+        page: Page,
+        outputs: MutableMap<String, String>,
+        pathPrefix: List<String>,
+        loopDepth: Int
+    ) {
+        for (step in steps) {
+            val current = getRunById(runId)
+            if (current.status == RunStatus.CANCELED) {
+                return
+            }
+
+            val stepPath = pathPrefix + step.id
+            persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
+            emit(runId, EventType.STEP_STARTED, buildStepPayload(step, stepPath))
+            emit(
+                runId,
+                EventType.LOG,
+                buildJsonObject {
+                    put("level", JsonPrimitive("INFO"))
+                    put("message", JsonPrimitive("执行步骤 ${step.data.label}"))
+                    put("stepPath", stepPath.toJsonArray())
+                }
+            )
+
+            try {
+                val stepOutputs = executeStepNode(runId, step, page, outputs, stepPath, loopDepth)
+                outputs.putAll(stepOutputs.first)
+                emit(
+                    runId,
+                    EventType.STEP_SUCCEEDED,
+                    buildJsonObject {
+                        put("stepId", JsonPrimitive(step.id))
+                        put("stepType", JsonPrimitive(step.type))
+                        put("stepPath", stepPath.toJsonArray())
+                        putParentPayload(stepPath)
+                        put(
+                            "outputs",
+                            buildJsonObject {
+                                stepOutputs.first.forEach { (key, value) ->
+                                    put(key, JsonPrimitive(value))
+                                }
+                            }
+                        )
+                    }
+                )
+                if (stepOutputs.second) {
+                    throw LoopBreakSignal()
+                }
+            } catch (ex: LoopBreakSignal) {
+                throw ex
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                val code = when (ex) {
+                    is com.thetower.utils.ApiException -> ex.code
+                    else -> ErrorCodes.INTERNAL_ERROR
+                }
+                val message = wsSafeMessage(ex.message ?: "执行失败")
+                emit(
+                    runId,
+                    EventType.STEP_FAILED,
+                    buildJsonObject {
+                        put("stepId", JsonPrimitive(step.id))
+                        put("stepType", JsonPrimitive(step.type))
+                        put("stepPath", stepPath.toJsonArray())
+                        putParentPayload(stepPath)
+                        put(
+                            "error",
+                            buildJsonObject {
+                                put("code", JsonPrimitive(code))
+                                put("message", JsonPrimitive(message))
+                            }
+                        )
+                    }
+                )
+                throw ex
+            }
+        }
+    }
+
+    private fun executeStepNode(
+        runId: String,
+        step: com.thetower.models.StepNode,
+        page: Page,
+        outputs: MutableMap<String, String>,
+        stepPath: List<String>,
+        loopDepth: Int
+    ): Pair<Map<String, String>, Boolean> {
+        return when (step.type) {
+            "if" -> {
+                val branch = if (evaluateCondition(step.data.config, outputs)) "then" else "else"
+                emitControlFlowLog(runId, stepPath, "IF 命中分支: $branch")
+                executeSteps(runId, getBranchSteps(step.data.config, branch), page, outputs, stepPath + branch, loopDepth)
+                emptyMap<String, String>() to false
+            }
+
+            "forTimes" -> {
+                val times = resolveIntConfig(step.data.config, "times", outputs)
+                val indexVar = resolveOptionalText(step.data.config, "indexVar", outputs)
+                for (index in 0 until times) {
+                    if (!indexVar.isNullOrBlank()) {
+                        outputs[indexVar] = index.toString()
+                    }
+                    emitControlFlowLog(runId, stepPath, "ForTimes 第 ${index + 1}/$times 次执行")
+                    try {
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), page, outputs, stepPath + "body", loopDepth + 1)
+                    } catch (_: LoopBreakSignal) {
+                        break
+                    }
+                }
+                emptyMap<String, String>() to false
+            }
+
+            "while" -> {
+                val maxIterations = resolveIntConfig(step.data.config, "maxIterations", outputs)
+                var iteration = 0
+                while (iteration < maxIterations && evaluateCondition(step.data.config, outputs)) {
+                    emitControlFlowLog(runId, stepPath, "While 第 ${iteration + 1}/$maxIterations 次执行")
+                    try {
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), page, outputs, stepPath + "body", loopDepth + 1)
+                    } catch (_: LoopBreakSignal) {
+                        break
+                    }
+                    iteration++
+                }
+                emptyMap<String, String>() to false
+            }
+
+            "break" -> emptyMap<String, String>() to true
+
+            else -> playwrightExecutor.executeStep(page, step) to false
+        }
+    }
+
+    private fun buildStepPayload(step: com.thetower.models.StepNode, stepPath: List<String>) = buildJsonObject {
+        put("stepId", JsonPrimitive(step.id))
+        put("stepType", JsonPrimitive(step.type))
+        put("stepPath", stepPath.toJsonArray())
+        putParentPayload(stepPath)
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putParentPayload(stepPath: List<String>) {
+        val parentStepId = stepPath.getOrNull(stepPath.lastIndex - 2)
+        val branch = stepPath.getOrNull(stepPath.lastIndex - 1)?.takeIf { it == "then" || it == "else" || it == "body" }
+        put("parentStepId", parentStepId?.let(::JsonPrimitive) ?: JsonNull)
+        put("branch", branch?.let(::JsonPrimitive) ?: JsonNull)
+    }
+
+    private fun List<String>.toJsonArray(): JsonArray = buildJsonArray {
+        this@toJsonArray.forEach { add(JsonPrimitive(it)) }
+    }
+
+    private fun emitControlFlowLog(runId: String, stepPath: List<String>, message: String) {
+        emit(
+            runId,
+            EventType.LOG,
+            buildJsonObject {
+                put("level", JsonPrimitive("INFO"))
+                put("message", JsonPrimitive(message))
+                put("stepPath", stepPath.toJsonArray())
+            }
+        )
     }
 
     private fun emit(runId: String, type: EventType, payload: kotlinx.serialization.json.JsonObject) {

@@ -24,7 +24,7 @@ interface WorkflowTemplate {
 
 interface Step {
   id: string;
-  type: 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract';
+  type: 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract' | 'if' | 'forTimes' | 'while' | 'break';
   position: { x: number; y: number };
   data: {
     label: string;
@@ -173,6 +173,103 @@ let templates: WorkflowTemplate[] = [
     updatedAt: '2026-01-30T16:00:00Z',
     stats: { stepCount: 0 },
     lastRun: null
+  },
+  {
+    id: 'tpl-004',
+    name: '示例：控制流 IF',
+    description: '根据条件进入 THEN 或 ELSE 分支',
+    schemaVersion: '0.0.4',
+    steps: [
+      {
+        id: 'step-if-001',
+        type: 'if',
+        position: { x: 160, y: 140 },
+        data: {
+          label: '判断登录状态',
+          config: {
+            condition: { left: '${token}', op: 'exists', right: '' },
+            then: [
+              {
+                id: 'step-then-001',
+                type: 'click',
+                position: { x: 100, y: 120 },
+                data: {
+                  label: '点击继续',
+                  config: { selector: '#continue' }
+                }
+              }
+            ],
+            else: [
+              {
+                id: 'step-else-001',
+                type: 'openUrl',
+                position: { x: 100, y: 120 },
+                data: {
+                  label: '跳转登录页',
+                  config: { url: 'https://example.com/login' }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    otherStep: {
+      nodes: [],
+      edges: []
+    },
+    createdAt: '2026-03-14T10:00:00Z',
+    updatedAt: '2026-03-14T10:00:00Z',
+    stats: { stepCount: 3 },
+    lastRun: null
+  },
+  {
+    id: 'tpl-005',
+    name: '示例：循环 BODY',
+    description: '在 For 次数节点中维护 BODY 子流程',
+    schemaVersion: '0.0.4',
+    steps: [
+      {
+        id: 'step-for-001',
+        type: 'forTimes',
+        position: { x: 180, y: 160 },
+        data: {
+          label: '重试三次',
+          config: {
+            times: 3,
+            indexVar: 'retryIndex',
+            body: [
+              {
+                id: 'step-body-001',
+                type: 'click',
+                position: { x: 100, y: 120 },
+                data: {
+                  label: '重试点击登录',
+                  config: { selector: '#retry-login' }
+                }
+              },
+              {
+                id: 'step-body-002',
+                type: 'waitFor',
+                position: { x: 100, y: 220 },
+                data: {
+                  label: '等待结果反馈',
+                  config: { waitMs: 1000 }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    otherStep: {
+      nodes: [],
+      edges: []
+    },
+    createdAt: '2026-03-15T09:00:00Z',
+    updatedAt: '2026-03-15T09:00:00Z',
+    stats: { stepCount: 3 },
+    lastRun: null
   }
 ];
 
@@ -258,7 +355,7 @@ export default {
       id: `tpl-${generateId()}`,
       name: body.name || '未命名模板',
       description: body.description || null,
-      schemaVersion: body.schemaVersion || '0.0.1',
+      schemaVersion: body.schemaVersion || '0.0.4',
       steps: body.steps || [],
       otherStep: body.otherStep || { nodes: [], edges: [] },
       createdAt: now,

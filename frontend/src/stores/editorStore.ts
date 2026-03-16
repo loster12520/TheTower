@@ -6,21 +6,61 @@ import { validateCanvas } from '@/utils/validator';
 import type { WorkflowTemplate, ApiError, Step } from '@/models';
 
 // 节点类型定义
-export type NodeType = 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract';
+export type NodeType = 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract' | 'if' | 'forTimes' | 'while' | 'break';
 
-export const NODE_TYPES: { type: NodeType; label: string; color: string; icon: string }[] = [
+export const NODE_TYPES: { type: NodeType; label: string; color: string; icon: string; isContainer?: boolean }[] = [
   { type: 'openUrl', label: '打开网页', color: '#1890ff', icon: '🌐' },
   { type: 'click', label: '点击元素', color: '#52c41a', icon: '👆' },
   { type: 'type', label: '输入文本', color: '#faad14', icon: '⌨️' },
   { type: 'waitFor', label: '等待', color: '#722ed1', icon: '⏱️' },
   { type: 'extract', label: '提取数据', color: '#eb2f96', icon: '📋' },
+  { type: 'if', label: 'IF 条件', color: '#0f766e', icon: '🔀', isContainer: true },
+  { type: 'forTimes', label: 'For 次数', color: '#2563eb', icon: '🔁', isContainer: true },
+  { type: 'while', label: 'While 循环', color: '#7c3aed', icon: '♾️', isContainer: true },
+  { type: 'break', label: '退出循环', color: '#dc2626', icon: '⛔' },
 ];
+
+type BranchType = 'then' | 'else' | 'body';
+
+interface FlowGraph {
+  nodes: Node[];
+  edges: Edge[];
+}
+
+interface ActiveSubflow {
+  nodeId: string;
+  branch: BranchType;
+}
+
+const isBranchType = (value: string): value is BranchType => value === 'then' || value === 'else' || value === 'body';
+
+const cloneConfig = (config: Record<string, unknown>) => JSON.parse(JSON.stringify(config ?? {})) as Record<string, unknown>;
+
+const cloneNodes = (nodes: Node[]): Node[] => nodes.map((node) => ({
+  ...node,
+  position: { ...node.position },
+  data: {
+    ...node.data,
+    config: cloneConfig((node.data?.config as Record<string, unknown>) || {}),
+  },
+}));
+
+const cloneEdges = (edges: Edge[]): Edge[] => edges.map((edge) => ({ ...edge }));
+
+const cloneGraph = (graph: FlowGraph): FlowGraph => ({
+  nodes: cloneNodes(graph.nodes),
+  edges: cloneEdges(graph.edges),
+});
 
 class EditorStore {
   // 画布数据
   nodes: Node[] = [];
   edges: Edge[] = [];
+  rootNodes: Node[] = [];
+  rootEdges: Edge[] = [];
   selectedNode: Node | null = null;
+  activeSubflow: ActiveSubflow | null = null;
+  subflowGraphMap: Record<string, Partial<Record<BranchType, FlowGraph>>> = {};
 
   // 模板信息
   templateId: string | null = null;
@@ -41,6 +81,66 @@ class EditorStore {
     makeAutoObservable(this);
   }
 
+  get isEditingSubflow() {
+    return this.activeSubflow !== null;
+  }
+
+  get canvasScopeLabel() {
+    if (!this.activeSubflow) {
+      return '主流程';
+    }
+
+    const rootNode = this.rootNodes.find((node) => node.id === this.activeSubflow?.nodeId);
+    const nodeLabel = (rootNode?.data?.label as string | undefined) || this.activeSubflow.nodeId;
+    return `子流程 / ${nodeLabel} / ${this.activeSubflow.branch.toUpperCase()}`;
+  }
+
+  get activeSubflowBranches(): BranchType[] {
+    if (!this.activeSubflow) {
+      return [];
+    }
+
+    const rootNode = this.rootNodes.find((node) => node.id === this.activeSubflow?.nodeId);
+    if (!rootNode) {
+      return [];
+    }
+
+    return Object.keys((rootNode.data?.config as Record<string, unknown>) || {})
+      .filter(isBranchType);
+  }
+
+  get activeSubflowNode() {
+    if (!this.activeSubflow) {
+      return null;
+    }
+
+    return this.rootNodes.find((node) => node.id === this.activeSubflow?.nodeId) || null;
+  }
+
+  get isLoopBodyScope() {
+    if (!this.activeSubflow || this.activeSubflow.branch !== 'body') {
+      return false;
+    }
+
+    return this.activeSubflowNode?.type === 'forTimes' || this.activeSubflowNode?.type === 'while';
+  }
+
+  get availableNodeTypes() {
+    return NODE_TYPES.filter((nodeType) => nodeType.type !== 'break' || this.isLoopBodyScope);
+  }
+
+  get activeSubflowHint() {
+    if (!this.activeSubflow) {
+      return '拖拽节点到主画布中添加。';
+    }
+
+    if (this.isLoopBodyScope) {
+      return '当前为循环 BODY，允许拖入退出循环节点。';
+    }
+
+    return '当前拖拽将投递到激活的子流程中。';
+  }
+
   // ========== 数据加载 ==========
 
   // 加载模板
@@ -59,8 +159,13 @@ class EditorStore {
 
         // 转换为 ReactFlow 格式
         const { nodes, edges } = stepsToGraph(template.steps, template.otherStep);
-        this.nodes = nodes;
-        this.edges = edges;
+        this.rootNodes = cloneNodes(nodes);
+        this.rootEdges = cloneEdges(edges);
+        this.nodes = cloneNodes(nodes);
+        this.edges = cloneEdges(edges);
+        this.activeSubflow = null;
+        this.subflowGraphMap = {};
+        this.selectedNode = null;
         this.isDirty = false;
       });
 
@@ -78,8 +183,10 @@ class EditorStore {
   async saveTemplate(): Promise<boolean> {
     if (!this.templateId) return false;
 
+    this.syncCurrentCanvas(false);
+
     // 转换数据
-    const { steps, otherStep, error } = graphToSteps(this.nodes, this.edges);
+    const { steps, otherStep, error } = graphToSteps(this.rootNodes, this.rootEdges);
     if (error) {
       this.setError(error);
       return false;
@@ -89,7 +196,7 @@ class EditorStore {
 
     try {
       await templateApi.saveSteps(this.templateId, {
-        schemaVersion: '0.0.1',
+        schemaVersion: '0.0.4',
         steps: steps as Step[],
         otherStep
       });
@@ -115,10 +222,16 @@ class EditorStore {
     const nodeType = NODE_TYPES.find(n => n.type === type);
     if (!nodeType) return;
 
+    if (type === 'break' && !this.isLoopBodyScope) {
+      this.setError('退出循环节点只能添加到循环 BODY 中');
+      return;
+    }
+
     const newNode = createNewNode(type, position, nodeType.label);
     
     runInAction(() => {
-      this.nodes.push(newNode);
+      this.nodes = [...this.nodes, newNode];
+      this.syncCurrentCanvas(false);
       this.isDirty = true;
     });
 
@@ -130,10 +243,13 @@ class EditorStore {
     runInAction(() => {
       const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
       if (nodeIndex !== -1) {
-        this.nodes[nodeIndex] = {
-          ...this.nodes[nodeIndex],
-          data: { ...this.nodes[nodeIndex].data, ...data }
+        const nextNodes = [...this.nodes];
+        nextNodes[nodeIndex] = {
+          ...nextNodes[nodeIndex],
+          data: { ...nextNodes[nodeIndex].data, ...data }
         };
+        this.nodes = nextNodes;
+        this.syncCurrentCanvas(false);
         this.isDirty = true;
       }
     });
@@ -149,6 +265,7 @@ class EditorStore {
         this.selectedNode = null;
       }
       
+      this.syncCurrentCanvas(false);
       this.isDirty = true;
     });
   }
@@ -163,7 +280,13 @@ class EditorStore {
     runInAction(() => {
       const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
       if (nodeIndex !== -1) {
-        this.nodes[nodeIndex].position = position;
+        const nextNodes = [...this.nodes];
+        nextNodes[nodeIndex] = {
+          ...nextNodes[nodeIndex],
+          position,
+        };
+        this.nodes = nextNodes;
+        this.syncCurrentCanvas(false);
         this.isDirty = true;
       }
     });
@@ -204,7 +327,8 @@ class EditorStore {
         target,
         type: 'smoothstep',
       };
-      this.edges.push(newEdge);
+      this.edges = [...this.edges, newEdge];
+      this.syncCurrentCanvas(false);
       this.isDirty = true;
       this.error = null; // 清除错误
     });
@@ -216,6 +340,7 @@ class EditorStore {
   deleteEdge(edgeId: string) {
     runInAction(() => {
       this.edges = this.edges.filter(e => e.id !== edgeId);
+      this.syncCurrentCanvas(false);
       this.isDirty = true;
     });
   }
@@ -224,8 +349,9 @@ class EditorStore {
 
   // 设置整个画布数据
   setCanvas(nodes: Node[], edges: Edge[]) {
-    this.nodes = nodes;
-    this.edges = edges;
+    this.nodes = cloneNodes(nodes);
+    this.edges = cloneEdges(edges);
+    this.syncCurrentCanvas(false);
     this.isDirty = true;
   }
 
@@ -234,14 +360,120 @@ class EditorStore {
     this.nodes = [];
     this.edges = [];
     this.selectedNode = null;
+    this.syncCurrentCanvas(false);
     this.isDirty = true;
+  }
+
+  enterSubflow(nodeId: string, branch: BranchType) {
+    this.syncCurrentCanvas(false);
+    const rootNode = this.rootNodes.find((node) => node.id === nodeId);
+    if (!rootNode) {
+      this.setError('未找到容器节点');
+      return;
+    }
+
+    const graph = this.getOrCreateSubflowGraph(nodeId, branch, rootNode);
+    this.activeSubflow = { nodeId, branch };
+    this.nodes = cloneNodes(graph.nodes);
+    this.edges = cloneEdges(graph.edges);
+    this.selectedNode = null;
+    this.error = null;
+  }
+
+  exitSubflow() {
+    if (!this.activeSubflow) return;
+
+    const rootNode = this.rootNodes.find((node) => node.id === this.activeSubflow?.nodeId) || null;
+    this.syncCurrentCanvas(false);
+    this.activeSubflow = null;
+    this.nodes = cloneNodes(this.rootNodes);
+    this.edges = cloneEdges(this.rootEdges);
+    this.selectedNode = rootNode;
+    this.error = null;
+  }
+
+  focusStepPath(stepPath: string[]): boolean {
+    if (stepPath.length === 0) {
+      return false;
+    }
+
+    this.syncCurrentCanvas(false);
+
+    const rootNode = this.rootNodes.find((node) => node.id === stepPath[0]) || null;
+    if (!rootNode) {
+      this.setError('未找到失败节点对应的主流程节点');
+      return false;
+    }
+
+    if (stepPath.length === 1 || !isBranchType(stepPath[1])) {
+      runInAction(() => {
+        this.activeSubflow = null;
+        this.nodes = cloneNodes(this.rootNodes);
+        this.edges = cloneEdges(this.rootEdges);
+        this.selectedNode = this.nodes.find((node) => node.id === rootNode.id) || null;
+        this.error = null;
+      });
+      return true;
+    }
+
+    const branch = stepPath[1];
+    this.enterSubflow(rootNode.id, branch);
+
+    const targetStepId = stepPath[2] || rootNode.id;
+    const targetNode = this.nodes.find((node) => node.id === targetStepId) || null;
+
+    runInAction(() => {
+      this.selectedNode = targetNode;
+    });
+
+    if (!targetNode) {
+      this.setError('已定位到失败分支，但未找到具体失败节点');
+      return false;
+    }
+
+    this.setError(null);
+    return true;
+  }
+
+  getSubflowCount(nodeId: string, branch: BranchType): number {
+    const graph = this.subflowGraphMap[nodeId]?.[branch];
+    if (graph) {
+      return graphToSteps(graph.nodes, graph.edges).steps.length;
+    }
+
+    const rootNode = this.rootNodes.find((node) => node.id === nodeId);
+    const branchSteps = rootNode?.data?.config?.[branch];
+    return Array.isArray(branchSteps) ? branchSteps.length : 0;
+  }
+
+  getSubflowPreviewLabels(nodeId: string, branch: BranchType, maxCount: number = 3): string[] {
+    const graph = this.subflowGraphMap[nodeId]?.[branch];
+    if (graph) {
+      const { steps } = graphToSteps(graph.nodes, graph.edges);
+      return steps.map((step) => step.data.label).slice(0, maxCount);
+    }
+
+    const rootNode = this.rootNodes.find((node) => node.id === nodeId);
+    const branchSteps = Array.isArray(rootNode?.data?.config?.[branch])
+      ? rootNode?.data?.config?.[branch] as Step[]
+      : [];
+    return branchSteps.map((step) => step.data.label).slice(0, maxCount);
+  }
+
+  getActiveSubflowStepCount(): number {
+    if (!this.activeSubflow) {
+      return 0;
+    }
+
+    return this.getSubflowCount(this.activeSubflow.nodeId, this.activeSubflow.branch);
   }
 
   // ========== 运行相关 ==========
 
   // 验证画布是否可以运行
   validateForRun(): { valid: boolean; errors: string[]; warnings: string[] } {
-    const { steps } = graphToSteps(this.nodes, this.edges);
+    this.syncCurrentCanvas(false);
+    const { steps } = graphToSteps(this.rootNodes, this.rootEdges);
     const result = validateCanvas(steps);
     
     return {
@@ -276,6 +508,65 @@ class EditorStore {
 
   setDirty(dirty: boolean) {
     this.isDirty = dirty;
+  }
+
+  private syncCurrentCanvas(markDirty: boolean) {
+    if (!this.activeSubflow) {
+      this.rootNodes = cloneNodes(this.nodes);
+      this.rootEdges = cloneEdges(this.edges);
+      if (markDirty) this.isDirty = true;
+      return;
+    }
+
+    const { nodeId, branch } = this.activeSubflow;
+    const graph: FlowGraph = {
+      nodes: cloneNodes(this.nodes),
+      edges: cloneEdges(this.edges),
+    };
+
+    if (!this.subflowGraphMap[nodeId]) {
+      this.subflowGraphMap[nodeId] = {};
+    }
+    this.subflowGraphMap[nodeId][branch] = graph;
+
+    const { steps, error } = graphToSteps(graph.nodes, graph.edges);
+    if (!error) {
+      const rootIndex = this.rootNodes.findIndex((node) => node.id === nodeId);
+      if (rootIndex !== -1) {
+        const rootNode = this.rootNodes[rootIndex];
+        const nextConfig = {
+          ...cloneConfig((rootNode.data?.config as Record<string, unknown>) || {}),
+          [branch]: steps,
+        };
+        this.rootNodes[rootIndex] = {
+          ...rootNode,
+          data: {
+            ...rootNode.data,
+            config: nextConfig,
+          },
+        };
+      }
+    }
+
+    if (markDirty) this.isDirty = true;
+  }
+
+  private getOrCreateSubflowGraph(nodeId: string, branch: BranchType, rootNode: Node): FlowGraph {
+    const existing = this.subflowGraphMap[nodeId]?.[branch];
+    if (existing) {
+      return cloneGraph(existing);
+    }
+
+    const branchSteps = Array.isArray(rootNode.data?.config?.[branch])
+      ? rootNode.data.config[branch] as Step[]
+      : [];
+    const graph = stepsToGraph(branchSteps, { nodes: [], edges: [] });
+
+    if (!this.subflowGraphMap[nodeId]) {
+      this.subflowGraphMap[nodeId] = {};
+    }
+    this.subflowGraphMap[nodeId][branch] = cloneGraph(graph);
+    return graph;
   }
 }
 

@@ -30,9 +30,20 @@ export interface WorkflowTemplate {
   lastRun: LastRun | null;
 }
 
+export type StepType =
+  | 'openUrl'
+  | 'click'
+  | 'type'
+  | 'waitFor'
+  | 'extract'
+  | 'if'
+  | 'forTimes'
+  | 'while'
+  | 'break';
+
 export interface Step {
   id: string;
-  type: 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract';
+  type: StepType;
   position: { x: number; y: number };
   data: {
     label: string;
@@ -51,12 +62,38 @@ export interface Edge {
   target: string;
 }
 
-export type NodeConfig =
-  | { url: string }
-  | { selector: string }
-  | { selector: string; text: string }
-  | { selector?: string; waitMs?: number }
-  | { selector: string; as: string; mode: string; attributeName?: string };
+export interface ConditionConfig {
+  left: string;
+  op:
+    | 'exists'
+    | 'notExists'
+    | 'contains'
+    | 'notContains'
+    | 'equals'
+    | 'notEquals'
+    | 'lt'
+    | 'lte'
+    | 'gt'
+    | 'gte';
+  right?: string;
+}
+
+export type NodeConfig = Record<string, unknown> & {
+  url?: string;
+  selector?: string;
+  text?: string;
+  waitMs?: number;
+  as?: string;
+  mode?: string;
+  attributeName?: string;
+  condition?: ConditionConfig;
+  then?: Step[];
+  else?: Step[];
+  body?: Step[];
+  times?: number;
+  indexVar?: string;
+  maxIterations?: number;
+};
 
 export interface LastRun {
   runId: string;

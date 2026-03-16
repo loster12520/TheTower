@@ -1,11 +1,24 @@
 import React, { useEffect } from 'react';
 import { observer } from 'mobx-react-lite';
-import { Form, Input, Radio, Card, Space, Typography, Tooltip } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Radio, Select, Space, Tag, Typography, Tooltip } from 'antd';
 import { QuestionCircleOutlined } from '@ant-design/icons';
 import { editorStore, NODE_TYPES } from '@/stores/editorStore';
 import type { NodeType } from '@/stores/editorStore';
 
 const { Text } = Typography;
+
+const conditionOperators = [
+  { value: 'exists', label: '存在' },
+  { value: 'notExists', label: '不存在' },
+  { value: 'contains', label: '包含' },
+  { value: 'notContains', label: '不包含' },
+  { value: 'equals', label: '等于' },
+  { value: 'notEquals', label: '不等于' },
+  { value: 'lt', label: '小于' },
+  { value: 'lte', label: '小于等于' },
+  { value: 'gt', label: '大于' },
+  { value: 'gte', label: '大于等于' },
+];
 
 // OpenUrl 配置
 const OpenUrlConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
@@ -161,6 +174,121 @@ const ExtractConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }
   );
 };
 
+const BranchSummary: React.FC<{ label: string; count: number }> = ({ label, count }) => (
+  <Tag color="blue">{label} {count}</Tag>
+);
+
+const IfConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const thenCount = Array.isArray(config.then) ? config.then.length : 0;
+  const elseCount = Array.isArray(config.else) ? config.else.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const activeBranch = editorStore.activeSubflow?.nodeId === nodeId ? editorStore.activeSubflow.branch : null;
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        message="当前支持节点内缩略 subflow 预览，并可进入 THEN / ELSE 子流程继续编辑。"
+        style={{ marginBottom: 16 }}
+      />
+      <Form.Item label="条件左值" name={['condition', 'left']} rules={[{ required: true, message: '请输入条件左值' }]}>
+        <Input placeholder="例如：${token}" />
+      </Form.Item>
+      <Form.Item label="条件操作符" name={['condition', 'op']} initialValue="exists" rules={[{ required: true, message: '请选择条件操作符' }]}>
+        <Select options={conditionOperators} />
+      </Form.Item>
+      <Form.Item label="条件右值" name={['condition', 'right']} extra="exists / notExists 可留空">
+        <Input placeholder="例如：success" />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="THEN" count={thenCount} />
+        <BranchSummary label="ELSE" count={elseCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={activeBranch === 'then' ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'then')}>
+          编辑 THEN
+        </Button>
+        <Button type={activeBranch === 'else' ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'else')}>
+          编辑 ELSE
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const ForTimesConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const bodyCount = Array.isArray(config.body) ? config.body.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const isActive = editorStore.activeSubflow?.nodeId === nodeId && editorStore.activeSubflow.branch === 'body';
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        message="当前支持节点内 BODY 缩略预览，并可进入子流程画布编辑循环体。"
+        style={{ marginBottom: 16 }}
+      />
+      <Form.Item label="循环次数" name="times" rules={[{ required: true, message: '请输入循环次数' }]}>
+        <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item label="索引变量名" name="indexVar" extra="例如：index">
+        <Input placeholder="index" />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="BODY" count={bodyCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={isActive ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'body')}>
+          编辑 BODY
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const WhileConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const bodyCount = Array.isArray(config.body) ? config.body.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const isActive = editorStore.activeSubflow?.nodeId === nodeId && editorStore.activeSubflow.branch === 'body';
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        message="当前支持节点内 BODY 缩略预览，并可进入子流程画布编辑循环体。"
+        style={{ marginBottom: 16 }}
+      />
+      <Form.Item label="条件左值" name={['condition', 'left']} rules={[{ required: true, message: '请输入条件左值' }]}>
+        <Input placeholder="例如：${count}" />
+      </Form.Item>
+      <Form.Item label="条件操作符" name={['condition', 'op']} initialValue="exists" rules={[{ required: true, message: '请选择条件操作符' }]}>
+        <Select options={conditionOperators} />
+      </Form.Item>
+      <Form.Item label="条件右值" name={['condition', 'right']}>
+        <Input placeholder="例如：10" />
+      </Form.Item>
+      <Form.Item label="最大循环次数" name="maxIterations" rules={[{ required: true, message: '请输入最大循环次数' }]}>
+        <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="BODY" count={bodyCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={isActive ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'body')}>
+          编辑 BODY
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const BreakConfig: React.FC<{ config: Record<string, unknown> }> = () => (
+  <Alert type="warning" showIcon message="退出循环节点只应放在循环 BODY 中；当前前端将在运行前校验其位置。" />
+);
+
 // 配置组件映射
 const configComponents: Record<NodeType, React.FC<{ config: Record<string, unknown> }>> = {
   openUrl: OpenUrlConfig,
@@ -168,6 +296,10 @@ const configComponents: Record<NodeType, React.FC<{ config: Record<string, unkno
   type: TypeConfig,
   waitFor: WaitForConfig,
   extract: ExtractConfig,
+  if: IfConfig,
+  forTimes: ForTimesConfig,
+  while: WhileConfig,
+  break: BreakConfig,
 };
 
 // 主配置面板
@@ -207,6 +339,11 @@ const NodeConfigPanel: React.FC = observer(() => {
       }
     });
 
+    const allValues = form.getFieldsValue(true) as Record<string, unknown>;
+    if (allValues.condition && typeof allValues.condition === 'object') {
+      newData.config.condition = allValues.condition as Record<string, unknown>;
+    }
+
     if (node.type === 'waitFor' && changedValues._waitType) {
       if (changedValues._waitType === 'selector') {
         delete newData.config.waitMs;
@@ -231,6 +368,7 @@ const NodeConfigPanel: React.FC = observer(() => {
 
   const nodeType = NODE_TYPES.find(n => n.type === node.type as NodeType);
   const ConfigComponent = configComponents[node.type as NodeType];
+  const activeScopeMatches = editorStore.activeSubflow?.nodeId === node.id;
 
   return (
     <Card
@@ -243,6 +381,14 @@ const NodeConfigPanel: React.FC = observer(() => {
       size="small"
       styles={{ header: { background: nodeType?.color, color: '#fff' } }}
     >
+      {activeScopeMatches && (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`当前正在编辑子流程：${editorStore.canvasScopeLabel}`}
+        />
+      )}
       <Form
         form={form}
         layout="vertical"

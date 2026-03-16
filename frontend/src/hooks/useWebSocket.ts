@@ -25,6 +25,9 @@ interface UseWebSocketOptions {
   };
 }
 
+const defaultDecodeMessage = (raw: string): WebSocketMessage => JSON.parse(raw);
+const defaultEncodeMessage = (data: unknown): string => JSON.stringify(data);
+
 export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
   const [status, setStatus] = useState<WebSocketStatus>('closed');
   const wsRef = useRef<WebSocket | null>(null);
@@ -32,6 +35,12 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectCountRef = useRef(0);
   const manualClosedRef = useRef(false);
+  const callbacksRef = useRef({
+    onMessage: options.onMessage,
+    onOpen: options.onOpen,
+    onClose: options.onClose,
+    onError: options.onError,
+  });
 
   const connectionKey = options.key || url || 'default';
   const reconnectMaxAttempts = options.reconnectMaxAttempts ?? 5;
@@ -39,8 +48,17 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
   const reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 10_000;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
 
-  const decodeMessage = options.messageAdapter?.decode || ((raw: string) => JSON.parse(raw));
-  const encodeMessage = options.messageAdapter?.encode || ((data: unknown) => JSON.stringify(data));
+  const decodeMessage = options.messageAdapter?.decode || defaultDecodeMessage;
+  const encodeMessage = options.messageAdapter?.encode || defaultEncodeMessage;
+
+  useEffect(() => {
+    callbacksRef.current = {
+      onMessage: options.onMessage,
+      onOpen: options.onOpen,
+      onClose: options.onClose,
+      onError: options.onError,
+    };
+  }, [options.onClose, options.onError, options.onMessage, options.onOpen]);
 
   const clearHeartbeat = useCallback(() => {
     if (heartbeatTimerRef.current) {
@@ -82,14 +100,14 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
         setStatus('open');
         reconnectCountRef.current = 0;
         startHeartbeat();
-        options.onOpen?.();
+        callbacksRef.current.onOpen?.();
       };
 
       const handleMessage = (event: MessageEvent) => {
         if (typeof event.data !== 'string') return;
         try {
           const data = decodeMessage(event.data);
-          options.onMessage?.(data);
+          callbacksRef.current.onMessage?.(data);
         } catch (err) {
           appLogger.error('[WebSocket] Failed to decode message:', err);
         }
@@ -100,7 +118,7 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
         setStatus('closed');
         wsRef.current = null;
         clearHeartbeat();
-        options.onClose?.();
+        callbacksRef.current.onClose?.();
 
         if (!manualClosedRef.current && reconnectCountRef.current < reconnectMaxAttempts) {
           const delay = Math.min(
@@ -118,7 +136,7 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
       const handleError = (error: Event) => {
         appLogger.error('[WebSocket] Error:', error);
         setStatus('error');
-        options.onError?.(error);
+        callbacksRef.current.onError?.(error);
       };
 
       ws.addEventListener('open', handleOpen);
@@ -145,7 +163,6 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions) {
     clearHeartbeat,
     connectionKey,
     decodeMessage,
-    options,
     reconnectBaseDelayMs,
     reconnectMaxAttempts,
     reconnectMaxDelayMs,

@@ -207,9 +207,11 @@ export function graphToSteps(nodes: Node[], edges: Edge[]): ConversionResult & {
  * 2. steps 相邻节点之间创建 edges
  * 3. otherStep.nodes 和 otherStep.edges 直接转换
  */
-export function stepsToGraph(steps: Step[], otherStep: OtherStep): GraphData {
+export function stepsToGraph(steps: Step[], otherStep?: OtherStep | null): GraphData {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
+  const otherNodes = Array.isArray(otherStep?.nodes) ? otherStep.nodes : [];
+  const otherEdges = Array.isArray(otherStep?.edges) ? otherStep.edges : [];
 
   // 转换 steps 为 nodes
   steps.forEach((step, index) => {
@@ -232,7 +234,7 @@ export function stepsToGraph(steps: Step[], otherStep: OtherStep): GraphData {
   });
 
   // 转换 otherStep.nodes
-  otherStep.nodes.forEach(node => {
+  otherNodes.forEach(node => {
     nodes.push({
       id: node.id,
       type: node.type,
@@ -242,7 +244,7 @@ export function stepsToGraph(steps: Step[], otherStep: OtherStep): GraphData {
   });
 
   // 转换 otherStep.edges
-  otherStep.edges.forEach(edge => {
+  otherEdges.forEach(edge => {
     edges.push({
       id: edge.id,
       source: edge.source,
@@ -290,6 +292,10 @@ function getDefaultLabel(type: Step['type']): string {
     type: '输入文本',
     waitFor: '等待',
     extract: '提取数据',
+    if: 'IF 条件',
+    forTimes: 'For 次数',
+    while: 'While 循环',
+    break: '退出循环',
   };
   return labelMap[type];
 }
@@ -309,6 +315,22 @@ function getDefaultConfig(type: Step['type']): Record<string, unknown> {
       return { selector: '', waitMs: undefined };
     case 'extract':
       return { selector: '', as: '', mode: 'text', attributeName: undefined };
+    case 'if':
+      return {
+        condition: { left: '', op: 'exists', right: '' },
+        then: [],
+        else: [],
+      };
+    case 'forTimes':
+      return { times: 1, indexVar: 'index', body: [] };
+    case 'while':
+      return {
+        condition: { left: '', op: 'exists', right: '' },
+        maxIterations: 10,
+        body: [],
+      };
+    case 'break':
+      return {};
     default:
       return {};
   }

@@ -1,16 +1,19 @@
+/// <reference types="node" />
+
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: ['real-backend.spec.ts'],
   timeout: 30_000,
   use: {
-    baseURL: 'http://127.0.0.1:8000',
+    baseURL: 'http://127.0.0.1:8010',
     headless: true,
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://127.0.0.1:8000',
-    reuseExistingServer: !process.env.CI,
+    command: 'cmd /c "set PORT=8010&&set UMI_APP_USE_MOCK=true&&npm run dev"',
+    url: 'http://127.0.0.1:8010',
+    reuseExistingServer: false,
     timeout: 120_000,
   },
   reporter: 'list',

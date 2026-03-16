@@ -14,6 +14,11 @@ class BadRequestException(
     details: Map<String, String>? = null
 ) : ApiException(HttpStatusCode.BadRequest, ErrorCodes.BAD_REQUEST, message, details)
 
+class InvalidStepConfigException(
+    message: String,
+    details: Map<String, String>? = null
+) : ApiException(HttpStatusCode.BadRequest, ErrorCodes.INVALID_STEP_CONFIG, message, details)
+
 class TemplateNotFoundException(message: String) :
     ApiException(HttpStatusCode.NotFound, ErrorCodes.TEMPLATE_NOT_FOUND, message)
 

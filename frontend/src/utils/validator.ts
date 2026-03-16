@@ -1,5 +1,11 @@
 import type { Step } from '@/models';
 
+type ConditionConfig = {
+  left?: string;
+  op?: string;
+  right?: string;
+};
+
 /**
  * 参数校验器
  * 
@@ -18,6 +24,10 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
+}
+
+interface ValidationContext {
+  insideLoopBody: boolean;
 }
 
 /**
@@ -274,10 +284,145 @@ function validateExtract(step: Step): ValidationError[] {
   return errors;
 }
 
+function validateCondition(step: Step, fieldPrefix: string, condition?: ConditionConfig): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const supportedOps = ['exists', 'notExists', 'contains', 'notContains', 'equals', 'notEquals', 'lt', 'lte', 'gt', 'gte'];
+
+  if (!condition) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: fieldPrefix,
+      message: '条件不能为空',
+    });
+    return errors;
+  }
+
+  if (!condition.left || condition.left.trim().length === 0) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: `${fieldPrefix}.left`,
+      message: '条件左值不能为空',
+    });
+  }
+
+  if (!condition.op || !supportedOps.includes(condition.op)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: `${fieldPrefix}.op`,
+      message: '条件操作符不支持',
+    });
+  }
+
+  return errors;
+}
+
+function validateIf(step: Step, context: ValidationContext): ValidationError[] {
+  const config = step.data.config as { condition?: ConditionConfig; then?: Step[]; else?: Step[] };
+  const errors = validateCondition(step, 'condition', config.condition);
+
+  if (!Array.isArray(config.then) || config.then.length === 0) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'then',
+      message: 'THEN 子步骤不能为空',
+    });
+  } else {
+    errors.push(...validateSteps(config.then, context).errors);
+  }
+
+  if (Array.isArray(config.else)) {
+    errors.push(...validateSteps(config.else, context).errors);
+  }
+
+  return errors;
+}
+
+function validateForTimes(step: Step): ValidationError[] {
+  const config = step.data.config as { times?: number; body?: Step[]; indexVar?: string };
+  const errors: ValidationError[] = [];
+
+  const times = Number(config.times);
+  if (Number.isNaN(times) || times <= 0 || !Number.isInteger(times)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'times',
+      message: '循环次数必须为正整数',
+    });
+  }
+
+  if (config.indexVar && !isValidVariableName(config.indexVar)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'indexVar',
+      message: '循环索引变量名格式不正确',
+    });
+  }
+
+  if (!Array.isArray(config.body) || config.body.length === 0) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'body',
+      message: 'BODY 子步骤不能为空',
+    });
+  } else {
+    errors.push(...validateSteps(config.body, { insideLoopBody: true }).errors);
+  }
+
+  return errors;
+}
+
+function validateWhile(step: Step): ValidationError[] {
+  const config = step.data.config as { condition?: ConditionConfig; maxIterations?: number; body?: Step[] };
+  const errors = validateCondition(step, 'condition', config.condition);
+  const maxIterations = Number(config.maxIterations);
+
+  if (Number.isNaN(maxIterations) || maxIterations <= 0 || !Number.isInteger(maxIterations)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'maxIterations',
+      message: '最大循环次数必须为正整数',
+    });
+  }
+
+  if (!Array.isArray(config.body) || config.body.length === 0) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'body',
+      message: 'BODY 子步骤不能为空',
+    });
+  } else {
+    errors.push(...validateSteps(config.body, { insideLoopBody: true }).errors);
+  }
+
+  return errors;
+}
+
+function validateBreak(step: Step, context: ValidationContext): ValidationError[] {
+  if (context.insideLoopBody) {
+    return [];
+  }
+
+  return [{
+    stepId: step.id,
+    stepLabel: step.data.label,
+    field: 'type',
+    message: '退出循环节点只能放在循环 BODY 中',
+  }];
+}
+
 /**
  * 验证单个步骤
  */
-function validateStep(step: Step): ValidationError[] {
+function validateStep(step: Step, context: ValidationContext): ValidationError[] {
   switch (step.type) {
     case 'openUrl':
       return validateOpenUrl(step);
@@ -289,6 +434,14 @@ function validateStep(step: Step): ValidationError[] {
       return validateWaitFor(step);
     case 'extract':
       return validateExtract(step);
+    case 'if':
+      return validateIf(step, context);
+    case 'forTimes':
+      return validateForTimes(step);
+    case 'while':
+      return validateWhile(step);
+    case 'break':
+      return validateBreak(step, context);
     default:
       return [{
         stepId: step.id,
@@ -302,11 +455,11 @@ function validateStep(step: Step): ValidationError[] {
 /**
  * 验证所有步骤
  */
-export function validateSteps(steps: Step[]): ValidationResult {
+export function validateSteps(steps: Step[], context: ValidationContext = { insideLoopBody: false }): ValidationResult {
   const allErrors: ValidationError[] = [];
 
   for (const step of steps) {
-    const errors = validateStep(step);
+    const errors = validateStep(step, context);
     allErrors.push(...errors);
   }
 

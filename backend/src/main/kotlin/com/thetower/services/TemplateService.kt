@@ -63,9 +63,8 @@ class TemplateService(
         if (request.name.isBlank()) {
             throw BadRequestException("name 不能为空", mapOf("field" to "name"))
         }
-        if (request.schemaVersion != "0.0.1") {
-            throw BadRequestException("schemaVersion 必须为 0.0.1", mapOf("field" to "schemaVersion"))
-        }
+        validateSchemaVersion(request.schemaVersion)
+        validateStepTree(request.steps)
 
         val now = nowIso()
         val template = WorkflowTemplate(
@@ -77,7 +76,7 @@ class TemplateService(
             otherStep = request.otherStep,
             createdAt = now,
             updatedAt = now,
-            stats = TemplateStats(stepCount = request.steps.size),
+            stats = TemplateStats(stepCount = countStepsRecursively(request.steps)),
             lastRun = null
         )
         val saved = repository.save(template)
@@ -104,9 +103,8 @@ class TemplateService(
     }
 
     fun updateTemplateSteps(id: String, request: SaveTemplateRequest): WorkflowTemplate {
-        if (request.schemaVersion != "0.0.1") {
-            throw BadRequestException("schemaVersion 必须为 0.0.1", mapOf("field" to "schemaVersion"))
-        }
+        validateSchemaVersion(request.schemaVersion)
+        validateStepTree(request.steps)
         val current = getTemplateById(id)
         val saved = repository.save(
             current.copy(
@@ -114,7 +112,7 @@ class TemplateService(
                 steps = request.steps,
                 otherStep = request.otherStep,
                 updatedAt = nowIso(),
-                stats = TemplateStats(stepCount = request.steps.size)
+                stats = TemplateStats(stepCount = countStepsRecursively(request.steps))
             )
         )
         invalidateTemplateCaches(saved.id)
@@ -139,5 +137,11 @@ class TemplateService(
         byIdCache.invalidate(templateId)
         listCache.clear()
         logger.info { "cache.invalidate scope=templates templateId=$templateId" }
+    }
+
+    private fun validateSchemaVersion(schemaVersion: String) {
+        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4") {
+            throw BadRequestException("schemaVersion 必须为 0.0.1 或 0.0.4", mapOf("field" to "schemaVersion"))
+        }
     }
 }
