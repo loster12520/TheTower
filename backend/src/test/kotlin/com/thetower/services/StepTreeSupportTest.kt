@@ -37,6 +37,34 @@ class StepTreeSupportTest {
     }
 
     @Test
+    fun `countStepsRecursively counts new 0_0_5 container branches`() {
+        val steps = listOf(
+            step(
+                id = "start-browser-1",
+                type = "startBrowser",
+                config = buildJsonObject {
+                    putJsonSteps(
+                        "body",
+                        listOf(
+                            step(
+                                id = "for-each-data-1",
+                                type = "forEachData",
+                                config = buildJsonObject {
+                                    put("dataVar", "items")
+                                    put("itemVar", "item")
+                                    putJsonSteps("body", listOf(step("click-1", "click")))
+                                }
+                            )
+                        )
+                    )
+                }
+            )
+        )
+
+        assertEquals(3, countStepsRecursively(steps))
+    }
+
+    @Test
     fun `validateStepTree rejects break outside loop`() {
         val ex = assertFailsWith<InvalidStepConfigException> {
             validateStepTree(listOf(step("break-1", "break")))
@@ -60,6 +88,77 @@ class StepTreeSupportTest {
                                 put("right", "1")
                             })
                             putJsonSteps("body", listOf(step("click-1", "click")))
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree accepts break inside forEachData body`() {
+        validateStepTree(
+            listOf(
+                step(
+                    "for-each-data-1",
+                    "forEachData",
+                    buildJsonObject {
+                        put("dataVar", "items")
+                        put("itemVar", "item")
+                        putJsonSteps("body", listOf(step("break-1", "break")))
+                    }
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `validateStepTree rejects forEachElement without selector and itemVar`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "for-each-element-1",
+                        "forEachElement",
+                        buildJsonObject {
+                            putJsonSteps("body", listOf(step("click-1", "click")))
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects empty forEachData body`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "for-each-data-1",
+                        "forEachData",
+                        buildJsonObject {
+                            put("dataVar", "items")
+                            put("itemVar", "item")
+                            putJsonSteps("body", emptyList())
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects invalid startBrowser enum`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "start-browser-1",
+                        "startBrowser",
+                        buildJsonObject {
+                            put("onError", "continue")
+                            putJsonSteps("body", listOf(step("open-1", "openUrl")))
                         }
                     )
                 )

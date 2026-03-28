@@ -1,20 +1,12 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import { templateApi } from '@/services/api';
-import type { WorkflowTemplate, ApiError } from '@/models';
+import type { WorkflowTemplate, TemplateSummary, ApiError } from '@/models';
+
+export const DEFAULT_TEMPLATE_SCHEMA_VERSION = '0.0.6';
+export const SUPPORTED_TEMPLATE_SCHEMA_VERSIONS = ['0.0.1', '0.0.4', '0.0.5', '0.0.6'] as const;
 
 // 列表项（不包含完整 steps）
-export interface TemplateListItem {
-  id: string;
-  name: string;
-  description: string | null;
-  updatedAt: string;
-  stats: { stepCount: number };
-  lastRun?: {
-    runId: string;
-    status: 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'RUNNING';
-    finishedAt: string | null;
-  } | null;
-}
+export type TemplateListItem = TemplateSummary;
 
 class TemplateStore {
   // 状态
@@ -55,7 +47,7 @@ class TemplateStore {
       const response = await templateApi.create({
         name,
         description: description || null,
-        schemaVersion: '0.0.4',
+        schemaVersion: DEFAULT_TEMPLATE_SCHEMA_VERSION,
         steps: [],
         otherStep: { nodes: [], edges: [] }
       });
@@ -114,7 +106,7 @@ class TemplateStore {
   async importTemplateFromJson(raw: unknown): Promise<string | null> {
     this.setError(null);
 
-    // 最小校验：支持 0.0.1 与 0.0.4
+    // 最小校验：支持当前前端可识别的模板版本
     if (!raw || typeof raw !== 'object') {
       this.setError('导入失败：文件内容不是合法 JSON 对象');
       return null;
@@ -132,8 +124,10 @@ class TemplateStore {
       return null;
     }
 
-    if (schemaVersion !== '0.0.1' && schemaVersion !== '0.0.4') {
-      this.setError(`导入失败：不支持的 schemaVersion（当前支持 0.0.1 / 0.0.4），实际为 ${String(schemaVersion)}`);
+    if (!SUPPORTED_TEMPLATE_SCHEMA_VERSIONS.includes(schemaVersion as (typeof SUPPORTED_TEMPLATE_SCHEMA_VERSIONS)[number])) {
+      this.setError(
+        `导入失败：不支持的 schemaVersion（当前支持 ${SUPPORTED_TEMPLATE_SCHEMA_VERSIONS.join(' / ')}），实际为 ${String(schemaVersion)}`
+      );
       return null;
     }
 

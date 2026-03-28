@@ -1,6 +1,7 @@
 package com.thetower.repository
 
 import com.thetower.models.Run
+import com.thetower.models.RunArtifact
 import com.thetower.models.RunError
 import com.thetower.models.RunStatus
 import com.thetower.persistence.jimmer.RunEntity
@@ -33,6 +34,8 @@ class RunRepository(
             startedAt = run.startedAt
             finishedAt = run.finishedAt
             errorJson = run.error?.let { json.encodeToString(it) }
+            outputsJson = json.encodeToString(run.outputs)
+            artifactsJson = json.encodeToString(run.artifacts)
         }
         val saved = mapEntity(sqlClient.entities.save(entity).modifiedEntity)
         storage[saved.id] = saved
@@ -129,6 +132,8 @@ class RunRepository(
     private fun mapEntity(entity: RunEntity): Run {
         val errorJson = entity.errorJson
         val error = errorJson?.let { json.decodeFromString<RunError>(it) }
+        val outputs = entity.outputsJson?.let { json.decodeFromString<Map<String, String>>(it) } ?: emptyMap()
+        val artifacts = entity.artifactsJson?.let { json.decodeFromString<List<RunArtifact>>(it) } ?: emptyList()
         return Run(
             id = entity.id,
             templateId = entity.templateId,
@@ -136,7 +141,9 @@ class RunRepository(
             currentStepId = entity.currentStepId,
             startedAt = entity.startedAt,
             finishedAt = entity.finishedAt,
-            error = error
+            error = error,
+            outputs = outputs,
+            artifacts = artifacts
         )
     }
 }

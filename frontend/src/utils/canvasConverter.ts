@@ -1,5 +1,6 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { Step, OtherStep } from '@/models';
+import { getDefaultNodeConfig, getNodeDefinition } from '@/models/stepRegistry';
 
 /**
  * 画布数据转换器
@@ -286,52 +287,12 @@ export function createNode(
  * 获取节点类型的默认标签
  */
 function getDefaultLabel(type: Step['type']): string {
-  const labelMap: Record<Step['type'], string> = {
-    openUrl: '打开网页',
-    click: '点击元素',
-    type: '输入文本',
-    waitFor: '等待',
-    extract: '提取数据',
-    if: 'IF 条件',
-    forTimes: 'For 次数',
-    while: 'While 循环',
-    break: '退出循环',
-  };
-  return labelMap[type];
+  return getNodeDefinition(type).label;
 }
 
 /**
  * 获取节点类型的默认配置
  */
 function getDefaultConfig(type: Step['type']): Record<string, unknown> {
-  switch (type) {
-    case 'openUrl':
-      return { url: '' };
-    case 'click':
-      return { selector: '' };
-    case 'type':
-      return { selector: '', text: '' };
-    case 'waitFor':
-      return { selector: '', waitMs: undefined };
-    case 'extract':
-      return { selector: '', as: '', mode: 'text', attributeName: undefined };
-    case 'if':
-      return {
-        condition: { left: '', op: 'exists', right: '' },
-        then: [],
-        else: [],
-      };
-    case 'forTimes':
-      return { times: 1, indexVar: 'index', body: [] };
-    case 'while':
-      return {
-        condition: { left: '', op: 'exists', right: '' },
-        maxIterations: 10,
-        body: [],
-      };
-    case 'break':
-      return {};
-    default:
-      return {};
-  }
+  return getDefaultNodeConfig(type);
 }

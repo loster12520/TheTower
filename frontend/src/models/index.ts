@@ -30,12 +30,44 @@ export interface WorkflowTemplate {
   lastRun: LastRun | null;
 }
 
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  schemaVersion: string;
+  updatedAt: string;
+  stats: { stepCount: number };
+  lastRun: LastRun | null;
+}
+
 export type StepType =
   | 'openUrl'
   | 'click'
   | 'type'
   | 'waitFor'
   | 'extract'
+  | 'newPage'
+  | 'closePage'
+  | 'switchPage'
+  | 'reloadPage'
+  | 'screenshotPage'
+  | 'hover'
+  | 'focus'
+  | 'selectOption'
+  | 'scrollPage'
+  | 'uploadFiles'
+  | 'executeJs'
+  | 'waitForResponse'
+  | 'getUrl'
+  | 'downloadFile'
+  | 'importText'
+  | 'totp'
+  | 'getCookies'
+  | 'clearCookies'
+  | 'forEachElement'
+  | 'forEachData'
+  | 'startBrowser'
+  | 'closeBrowser'
   | 'if'
   | 'forTimes'
   | 'while'
@@ -101,6 +133,47 @@ export interface LastRun {
   finishedAt: string | null;
 }
 
+export interface RunArtifact {
+  artifactId: string;
+  name: string;
+  kind: string;
+  relativePath: string;
+  createdAt: string;
+}
+
+export interface RunDebugOptions {
+  enabled: boolean;
+  openVisibleBrowser?: boolean;
+  openDevtools?: boolean;
+  previewFps?: number;
+  previewQuality?: number;
+}
+
+export type DebugSessionStatus = 'IDLE' | 'STARTING' | 'STREAMING' | 'CLOSED' | 'ERROR';
+
+export interface RunDebugSession {
+  enabled: boolean;
+  openVisibleBrowser: boolean;
+  openDevtools: boolean;
+  previewFps: number;
+  previewQuality: number;
+  status: DebugSessionStatus;
+  pageAlias?: string | null;
+  contextId?: string | null;
+  lastFrameTs?: string | null;
+  lastError?: string | null;
+}
+
+export interface DebugPreviewFrame {
+  mimeType: string;
+  frameBase64: string;
+  width: number;
+  height: number;
+  pageAlias?: string | null;
+  contextId?: string | null;
+  ts: string;
+}
+
 // 运行相关类型
 export interface Run {
   id: string;
@@ -110,4 +183,6 @@ export interface Run {
   startedAt: string | null;
   finishedAt: string | null;
   error: { code: string; message: string } | null;
+  outputs: Record<string, string>;
+  artifacts: RunArtifact[];
 }

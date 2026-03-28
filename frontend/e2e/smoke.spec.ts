@@ -4,6 +4,7 @@ test('home page should render template title and create button', async ({ page }
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '工作流模板' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新建模板' })).toBeVisible();
+  await expect(page.getByText('默认版本 0.0.6')).toBeVisible();
 });
 
 test('create template should navigate to editor page', async ({ page }) => {
@@ -16,6 +17,7 @@ test('create template should navigate to editor page', async ({ page }) => {
   const templateName = `E2E模板-${Date.now()}`;
   await dialog.locator('input[placeholder="例如：抓取网页标题"]').fill(templateName);
   await dialog.locator('textarea[placeholder="简要描述这个工作流的功能..."]').fill('Playwright 自动化创建');
+  await expect(dialog.getByText('schemaVersion 0.0.6')).toBeVisible();
   await dialog.getByRole('button', { name: /创\s*建/ }).click();
 
   await expect(page).toHaveURL(/\/editor\?id=/);
@@ -27,6 +29,7 @@ test('existing template should open editor from list', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByText('示例：抓取网页标题')).toBeVisible();
+  await expect(page.locator('.template-card').filter({ hasText: '示例：抓取网页标题' }).getByText('Schema 0.0.1')).toBeVisible();
   await page.getByText('示例：抓取网页标题').first().click();
 
   await expect(page).toHaveURL(/\/editor\?id=tpl-001/);
@@ -57,6 +60,7 @@ test('editor should add node after dragging from node library to canvas', async 
   await expect(page.locator('.react-flow__node')).toHaveCount(beforeCount + 1);
   await expect(page.getByText('打开网页').first()).toBeVisible();
 });
+
 
 test('editor should enter then subflow for control-flow template', async ({ page }) => {
   await page.goto('/editor?id=tpl-004');

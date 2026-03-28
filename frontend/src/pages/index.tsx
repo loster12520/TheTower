@@ -26,7 +26,11 @@ import {
   ExportOutlined
 } from '@ant-design/icons';
 import { history } from 'umi';
-import { templateStore } from '@/stores/templateStore';
+import {
+  DEFAULT_TEMPLATE_SCHEMA_VERSION,
+  SUPPORTED_TEMPLATE_SCHEMA_VERSIONS,
+  templateStore,
+} from '@/stores/templateStore';
 import type { TemplateListItem } from '@/stores/templateStore';
 import './index.scss';
 
@@ -252,6 +256,7 @@ const HomePage: React.FC = observer(() => {
             </Paragraph>
             
             <Space wrap>
+              <Tag className="home-page__schema-tag">Schema {template.schemaVersion}</Tag>
               <Tag color="blue">{template.stats.stepCount} 个节点</Tag>
               {template.lastRun && (
                 <Tag color={templateStore.getStatusColor(template.lastRun.status)}>
@@ -281,8 +286,13 @@ const HomePage: React.FC = observer(() => {
 
       {/* 页面标题 */}
       <div className="home-page__header">
-        <Title level={2}>工作流模板</Title>
-        <Text type="secondary">管理和运行您的浏览器自动化工作流</Text>
+        <Space align="center" wrap>
+          <Title level={2}>工作流模板</Title>
+          <Tag color="gold" className="home-page__default-version-tag">
+            默认版本 {DEFAULT_TEMPLATE_SCHEMA_VERSION}
+          </Tag>
+        </Space>
+        <Text type="secondary">管理和运行您的浏览器自动化工作流，导入兼容 {SUPPORTED_TEMPLATE_SCHEMA_VERSIONS.join(' / ')}</Text>
       </div>
 
       {/* 操作栏 */}
@@ -384,6 +394,10 @@ const HomePage: React.FC = observer(() => {
               showCount
             />
           </Form.Item>
+
+          <Text type="secondary" className="home-page__modal-hint">
+            新模板将使用 schemaVersion {DEFAULT_TEMPLATE_SCHEMA_VERSION}。导入模板支持 {SUPPORTED_TEMPLATE_SCHEMA_VERSIONS.join(' / ')}。
+          </Text>
         </Form>
       </Modal>
 

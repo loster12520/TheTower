@@ -26,5 +26,7 @@ test('import should create a new template', async ({ page }) => {
   await page.locator('input[type="file"]').setInputFiles(filePath);
 
   await expect(page.getByText('导入成功')).toBeVisible();
-  await expect(page.getByText('导入用例：WS Step Failed')).toBeVisible();
+  const importedCard = page.locator('.template-card', { hasText: '导入用例：WS Step Failed' }).first();
+  await expect(importedCard).toBeVisible();
+  await expect(importedCard.getByText('Schema 0.0.1')).toBeVisible();
 });

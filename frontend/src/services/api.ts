@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import type { ApiResponse, ApiError, HealthResponse, WorkflowTemplate, Run } from '@/models';
+import type { ApiResponse, ApiError, HealthResponse, WorkflowTemplate, TemplateSummary, Run, RunDebugOptions, RunDebugSession } from '@/models';
 import { appLogger, runtimeConfig } from '@/config/runtime';
 
 /**
@@ -142,7 +142,7 @@ export const healthApi = {
 // ==================== Template API ====================
 export const templateApi = {
   // 获取模板列表
-  list(includeLastRun: boolean = true): Promise<ApiResponse<{ items: WorkflowTemplate[] }>> {
+  list(includeLastRun: boolean = true): Promise<ApiResponse<{ items: TemplateSummary[] }>> {
     return request.get('/templates', { includeLastRun });
   },
   
@@ -185,8 +185,8 @@ export const templateApi = {
 // ==================== Run API ====================
 export const runApi = {
   // 发起运行
-  start(templateId: string, dryRun: boolean = false): Promise<ApiResponse<{ run: Run; wsUrl: string }>> {
-    return request.post('/runs', { templateId, dryRun });
+  start(templateId: string, dryRun: boolean = false, debug?: RunDebugOptions): Promise<ApiResponse<{ run: Run; wsUrl: string; debug?: RunDebugSession | null }>> {
+    return request.post('/runs', { templateId, dryRun, debug });
   },
   
   // 取消运行
@@ -197,6 +197,14 @@ export const runApi = {
   // 重启运行
   restart(id: string): Promise<ApiResponse<{ run: Run; wsUrl: string }>> {
     return request.post(`/runs/${id}/restart`);
+  },
+
+  openDebugBrowser(id: string): Promise<ApiResponse<RunDebugSession>> {
+    return request.post(`/runs/${id}/debug/open-browser`);
+  },
+
+  closeDebug(id: string): Promise<ApiResponse<RunDebugSession>> {
+    return request.post(`/runs/${id}/debug/close`);
   },
   
   // 删除运行记录

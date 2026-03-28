@@ -36,6 +36,7 @@ class TemplateService(
                     id = template.id,
                     name = template.name,
                     description = template.description,
+                    schemaVersion = template.schemaVersion,
                     updatedAt = template.updatedAt,
                     stats = template.stats,
                     lastRun = if (includeLastRun) template.lastRun else null
@@ -140,8 +141,8 @@ class TemplateService(
     }
 
     private fun validateSchemaVersion(schemaVersion: String) {
-        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4") {
-            throw BadRequestException("schemaVersion 必须为 0.0.1 或 0.0.4", mapOf("field" to "schemaVersion"))
+        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4" && schemaVersion != "0.0.5" && schemaVersion != "0.0.6") {
+            throw BadRequestException("schemaVersion 必须为 0.0.1、0.0.4、0.0.5 或 0.0.6", mapOf("field" to "schemaVersion"))
         }
     }
 }

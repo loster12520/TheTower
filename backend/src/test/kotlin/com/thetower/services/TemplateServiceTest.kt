@@ -13,6 +13,7 @@ import com.thetower.utils.SqliteConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -24,11 +25,11 @@ class TemplateServiceTest {
     )
 
     @Test
-    fun `createTemplate accepts 0_0_4 and counts nested steps`() {
+    fun `createTemplate accepts 0_0_5 and counts nested steps`() {
         val created = service.createTemplate(
             CreateTemplateRequest(
                 name = "control flow",
-                schemaVersion = "0.0.4",
+                schemaVersion = "0.0.5",
                 steps = listOf(
                     step(
                         id = "if-1",
@@ -60,7 +61,7 @@ class TemplateServiceTest {
             )
         )
 
-        assertEquals("0.0.4", created.schemaVersion)
+        assertEquals("0.0.5", created.schemaVersion)
         assertEquals(2, created.stats.stepCount)
     }
 
@@ -95,6 +96,22 @@ class TemplateServiceTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun `getTemplates includes schemaVersion in summary`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "summary",
+                schemaVersion = "0.0.6"
+            )
+        )
+
+        val summary = service.getTemplates(includeLastRun = true)
+            .firstOrNull { it.id == created.id }
+
+        assertNotNull(summary)
+        assertEquals("0.0.6", summary.schemaVersion)
     }
 
     private fun step(id: String, type: String, config: kotlinx.serialization.json.JsonObject = buildJsonObject {}): StepNode {

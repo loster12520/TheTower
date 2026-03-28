@@ -1,37 +1,50 @@
 package com.thetower.services
 
+import com.thetower.executor.PlaywrightRunSession
 import com.thetower.executor.PlaywrightRunExecutor
+import com.thetower.executor.StepExecutionResult
 import com.thetower.models.EventType
 import com.thetower.models.LastRun
 import com.thetower.models.Run
+import com.thetower.models.RunArtifact
+import com.thetower.models.RunDebugOptions
+import com.thetower.models.RunDebugSession
 import com.thetower.models.RunError
 import com.thetower.models.RunEvent
 import com.thetower.models.RunStatus
+import com.thetower.models.StepNode
 import com.thetower.models.StartRunData
+import com.thetower.models.DebugSessionStatus
 import com.thetower.repository.RunRepository
+import com.thetower.utils.ApiException
 import com.thetower.utils.BadRequestException
 import com.thetower.utils.ErrorCodes
 import com.thetower.utils.RunNotFoundException
 import com.thetower.utils.TtlCache
 import com.thetower.utils.newId
 import com.thetower.utils.nowIso
+import io.ktor.http.HttpStatusCode
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import com.microsoft.playwright.Page
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -47,19 +60,28 @@ class RunService(
     private val eventFlows = ConcurrentHashMap<String, MutableSharedFlow<RunEvent>>()
     private val seqCounters = ConcurrentHashMap<String, AtomicLong>()
     private val runRequestIds = ConcurrentHashMap<String, String>()
+    private val runDebugOptions = ConcurrentHashMap<String, RunDebugOptions>()
+    private val runDebugSessions = ConcurrentHashMap<String, RunDebugSession>()
+    private val closedDebugRuns = ConcurrentHashMap.newKeySet<String>()
+    private val debugPreviewLocks = ConcurrentHashMap<String, Any>()
+    private val activeDebugSessions = ConcurrentHashMap<String, PlaywrightRunSession>()
+    private val debugPreviewJobs = ConcurrentHashMap<String, Job>()
     private val runByIdCache = TtlCache<String, Run>(ttlMs = 10_000)
     private val runListCache = TtlCache<String, Pair<List<Run>, Int>>(ttlMs = 10_000)
+    private val json = Json { ignoreUnknownKeys = true }
 
     private fun wsSafeMessage(message: String, limit: Int = 2_000): String {
         if (message.length <= limit) return message
         return message.take(limit) + "\n...(truncated, see GET /api/v1/runs/{id})"
     }
 
-    fun startRun(templateId: String, dryRun: Boolean, requestId: String? = null): StartRunData {
+    fun startRun(templateId: String, dryRun: Boolean, requestId: String? = null, debug: RunDebugOptions? = null): StartRunData {
         val template = templateService.getTemplateById(templateId)
         if (template.steps.isEmpty() && !dryRun) {
             throw BadRequestException("steps 不能为空", mapOf("field" to "steps"))
         }
+
+        val normalizedDebug = normalizeDebugOptions(debug)
 
         val runId = newId()
         val now = nowIso()
@@ -79,22 +101,105 @@ class RunService(
         if (!requestId.isNullOrBlank()) {
             runRequestIds[runId] = requestId
         }
+        if (normalizedDebug != null) {
+            runDebugOptions[runId] = normalizedDebug
+            runDebugSessions[runId] = normalizedDebug.toSession(status = DebugSessionStatus.IDLE)
+            closedDebugRuns.remove(runId)
+        }
 
         val job = scope.launch {
-            executeRun(runId, templateId, dryRun)
+            executeRun(runId, templateId, dryRun, normalizedDebug)
         }
         runningJobs[runId] = job
 
         return StartRunData(
             run = initialRun,
-            wsUrl = "/ws/v1/runs/$runId"
+            wsUrl = "/ws/v1/runs/$runId",
+            debug = runDebugSessions[runId]
         )
     }
 
     fun restartRun(runId: String): StartRunData {
         val run = getRunById(runId)
         val requestId = runRequestIds[runId]
-        return startRun(run.templateId, dryRun = false, requestId = requestId)
+        return startRun(run.templateId, dryRun = false, requestId = requestId, debug = runDebugOptions[runId])
+    }
+
+    fun getDebugSession(runId: String): RunDebugSession {
+        getRunById(runId)
+        return runDebugSessions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+    }
+
+    fun openDebugBrowser(runId: String): RunDebugSession {
+        val run = getRunById(runId)
+        val options = runDebugOptions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+
+        if (!(options.openVisibleBrowser || options.openDevtools)) {
+            throw ApiException(
+                status = HttpStatusCode.Conflict,
+                code = ErrorCodes.DEBUG_BROWSER_OPEN_ERROR,
+                message = "当前调试运行未以可见浏览器模式启动，无法在运行中切换打开；请重新以调试运行启动"
+            )
+        }
+
+        val session = activeDebugSessions[runId]
+            ?: throw ApiException(
+                status = HttpStatusCode.Conflict,
+                code = ErrorCodes.DEBUG_BROWSER_OPEN_ERROR,
+                message = if (run.status == RunStatus.RUNNING || run.status == RunStatus.PENDING) {
+                    "调试浏览器尚未准备完成，请稍后重试"
+                } else {
+                    "运行已结束，无法再打开宿主机浏览器调试"
+                }
+            )
+
+        closedDebugRuns.remove(runId)
+        session.bringDebugBrowserToFront()
+        ensureDebugPreviewLoop(runId, session, options)
+        val current = runDebugSessions[runId] ?: options.toSession(status = DebugSessionStatus.STARTING)
+        val nextStatus = if (current.status == DebugSessionStatus.CLOSED || current.status == DebugSessionStatus.IDLE) {
+            DebugSessionStatus.STREAMING
+        } else {
+            current.status
+        }
+        val reopened = current.copy(
+            status = nextStatus,
+            pageAlias = session.currentPageAlias(),
+            contextId = session.currentContextId()
+        )
+        runDebugSessions[runId] = reopened
+        emitDebugStatus(runId, nextStatus, "host browser debug requested", reopened.pageAlias, reopened.contextId, reopened.lastError)
+        emitDebugPreview(runId, session, options)
+        return runDebugSessions[runId] ?: reopened
+    }
+
+    fun closeDebugChannel(runId: String): RunDebugSession {
+        getRunById(runId)
+        val options = runDebugOptions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+        val current = runDebugSessions[runId] ?: options.toSession(status = DebugSessionStatus.CLOSED)
+        val lock = debugPreviewLocks.computeIfAbsent(runId) { Any() }
+        synchronized(lock) {
+            closedDebugRuns.add(runId)
+            stopDebugPreviewLoop(runId)
+            val closed = current.copy(status = DebugSessionStatus.CLOSED)
+            runDebugSessions[runId] = closed
+            emit(
+                runId,
+                EventType.DEBUG_SESSION_CLOSED,
+                buildJsonObject {
+                    put("status", JsonPrimitive(DebugSessionStatus.CLOSED.name))
+                    put("summary", JsonPrimitive("debug preview closed by user"))
+                    put("pageAlias", closed.pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                    put("contextId", closed.contextId?.let(::JsonPrimitive) ?: JsonNull)
+                    put("lastFrameTs", closed.lastFrameTs?.let(::JsonPrimitive) ?: JsonNull)
+                    put("error", closed.lastError?.let(::JsonPrimitive) ?: JsonNull)
+                }
+            )
+            return closed
+        }
     }
 
     fun getRunById(runId: String): Run = runRepository.findById(runId)
@@ -136,6 +241,7 @@ class RunService(
             currentStepId = null
         )
         persistRun(canceled)
+        closeDebugSession(runId, "run canceled")
         emit(
             runId,
             EventType.RUN_CANCELED,
@@ -163,7 +269,7 @@ class RunService(
 
     fun eventFlow(runId: String): SharedFlow<RunEvent>? = eventFlows[runId]
 
-    private suspend fun executeRun(runId: String, templateId: String, dryRun: Boolean) {
+    private suspend fun executeRun(runId: String, templateId: String, dryRun: Boolean, debug: RunDebugOptions?) {
         try {
             val runningRun = getRunById(runId).copy(status = RunStatus.RUNNING)
             persistRun(runningRun)
@@ -172,12 +278,19 @@ class RunService(
                 EventType.RUN_STARTED,
                 buildJsonObject {
                     put("templateId", JsonPrimitive(templateId))
+                    put("debugEnabled", JsonPrimitive(debug?.enabled == true))
                 }
             )
+
+            if (debug?.enabled == true) {
+                emitDebugSessionStarted(runId, debug)
+                emitDebugStatus(runId, DebugSessionStatus.STARTING, "debug session created")
+            }
 
             if (dryRun) {
                 val succeeded = runningRun.copy(status = RunStatus.SUCCEEDED, finishedAt = nowIso())
                 persistRun(succeeded)
+                closeDebugSession(runId, "dry-run")
                 emit(runId, EventType.RUN_SUCCEEDED, buildJsonObject { put("summary", JsonPrimitive("dry-run")) })
                 templateService.updateLastRun(
                     templateId,
@@ -190,23 +303,55 @@ class RunService(
             validateStepTree(template.steps)
 
             withContext(Dispatchers.IO) {
-                playwrightExecutor.withPage { page ->
-                    executeSteps(runId, template.steps, page, mutableMapOf(), emptyList(), loopDepth = 0)
+                playwrightExecutor.withSession(runId, debug) { session ->
+                    activeDebugSessions[runId] = session
+                    val previewJob = if (debug?.enabled == true) {
+                        ensureDebugPreviewLoop(runId, session, debug)
+                    } else {
+                        null
+                    }
+                    if (debug?.enabled == true) {
+                        emitDebugStatus(
+                            runId,
+                            DebugSessionStatus.STREAMING,
+                            "preview ready",
+                            session.currentPageAlias(),
+                            session.currentContextId()
+                        )
+                        emitDebugPreview(runId, session, debug)
+                    }
+                    try {
+                        executeSteps(runId, template.steps, session, mutableMapOf(), mutableListOf(), emptyList(), loopDepth = 0, debug = debug)
+                    } finally {
+                        previewJob?.cancel()
+                        debugPreviewJobs.remove(runId)
+                        activeDebugSessions.remove(runId)
+                    }
                 }
             }
 
-            val succeeded = getRunById(runId).copy(
+            val finalRun = getRunById(runId)
+            val succeeded = finalRun.copy(
                 status = RunStatus.SUCCEEDED,
                 currentStepId = null,
                 finishedAt = nowIso(),
                 error = null
             )
             persistRun(succeeded)
-            emit(runId, EventType.RUN_SUCCEEDED, buildJsonObject { put("summary", JsonPrimitive("ok")) })
+            emit(
+                runId,
+                EventType.RUN_SUCCEEDED,
+                buildJsonObject {
+                    put("summary", JsonPrimitive("ok"))
+                    putOutputs(finalRun.outputs)
+                    putArtifacts(finalRun.artifacts)
+                }
+            )
             templateService.updateLastRun(
                 templateId,
                 LastRun(runId = runId, status = RunStatus.SUCCEEDED.name, finishedAt = succeeded.finishedAt)
             )
+            closeDebugSession(runId, "run finished")
         } catch (_: CancellationException) {
             val canceled = runRepository.findById(runId)?.copy(
                 status = RunStatus.CANCELED,
@@ -216,6 +361,7 @@ class RunService(
             if (canceled != null) {
                 persistRun(canceled)
             }
+            closeDebugSession(runId, "run canceled")
         } catch (ex: Exception) {
             val failed = getRunById(runId).copy(
                 status = RunStatus.FAILED,
@@ -248,6 +394,8 @@ class RunService(
                 templateId,
                 LastRun(runId = runId, status = RunStatus.FAILED.name, finishedAt = failed.finishedAt)
             )
+            emitDebugError(runId, ex.message ?: "调试运行失败")
+            closeDebugSession(runId, "run failed", ex.message)
         } finally {
             runningJobs.remove(runId)
         }
@@ -255,11 +403,13 @@ class RunService(
 
     private fun executeSteps(
         runId: String,
-        steps: List<com.thetower.models.StepNode>,
-        page: Page,
+        steps: List<StepNode>,
+        session: PlaywrightRunSession,
         outputs: MutableMap<String, String>,
+        artifacts: MutableList<RunArtifact>,
         pathPrefix: List<String>,
-        loopDepth: Int
+        loopDepth: Int,
+        debug: RunDebugOptions?
     ) {
         for (step in steps) {
             val current = getRunById(runId)
@@ -270,6 +420,10 @@ class RunService(
             val stepPath = pathPrefix + step.id
             persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
             emit(runId, EventType.STEP_STARTED, buildStepPayload(step, stepPath))
+            if (debug?.enabled == true) {
+                emitDebugStatus(runId, DebugSessionStatus.STREAMING, "step started", session.currentPageAlias(), session.currentContextId())
+                emitDebugPreview(runId, session, debug)
+            }
             emit(
                 runId,
                 EventType.LOG,
@@ -281,8 +435,10 @@ class RunService(
             )
 
             try {
-                val stepOutputs = executeStepNode(runId, step, page, outputs, stepPath, loopDepth)
-                outputs.putAll(stepOutputs.first)
+                val result = executeStepNode(runId, step, session, outputs, artifacts, stepPath, loopDepth, debug)
+                outputs.putAll(result.first.outputs)
+                artifacts.addAll(result.first.artifacts)
+                persistStepProgress(runId, step.id, outputs, artifacts)
                 emit(
                     runId,
                     EventType.STEP_SUCCEEDED,
@@ -291,17 +447,23 @@ class RunService(
                         put("stepType", JsonPrimitive(step.type))
                         put("stepPath", stepPath.toJsonArray())
                         putParentPayload(stepPath)
-                        put(
-                            "outputs",
-                            buildJsonObject {
-                                stepOutputs.first.forEach { (key, value) ->
-                                    put(key, JsonPrimitive(value))
-                                }
-                            }
-                        )
+                        putOutputs(result.first.outputs)
+                        putArtifacts(result.first.artifacts)
+                        put("pageAlias", result.first.pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                        put("contextId", result.first.contextId?.let(::JsonPrimitive) ?: JsonNull)
                     }
                 )
-                if (stepOutputs.second) {
+                if (debug?.enabled == true) {
+                    emitDebugStatus(
+                        runId,
+                        DebugSessionStatus.STREAMING,
+                        "step succeeded",
+                        result.first.pageAlias ?: session.currentPageAlias(),
+                        result.first.contextId ?: session.currentContextId()
+                    )
+                    emitDebugPreview(runId, session, debug)
+                }
+                if (result.second) {
                     throw LoopBreakSignal()
                 }
             } catch (ex: LoopBreakSignal) {
@@ -331,6 +493,9 @@ class RunService(
                         )
                     }
                 )
+                if (debug?.enabled == true) {
+                    emitDebugError(runId, message, stepPath, step.id, session.currentPageAlias(), session.currentContextId())
+                }
                 throw ex
             }
         }
@@ -338,18 +503,20 @@ class RunService(
 
     private fun executeStepNode(
         runId: String,
-        step: com.thetower.models.StepNode,
-        page: Page,
+        step: StepNode,
+        session: PlaywrightRunSession,
         outputs: MutableMap<String, String>,
+        artifacts: MutableList<RunArtifact>,
         stepPath: List<String>,
-        loopDepth: Int
-    ): Pair<Map<String, String>, Boolean> {
+        loopDepth: Int,
+        debug: RunDebugOptions?
+    ): Pair<StepExecutionResult, Boolean> {
         return when (step.type) {
             "if" -> {
                 val branch = if (evaluateCondition(step.data.config, outputs)) "then" else "else"
                 emitControlFlowLog(runId, stepPath, "IF 命中分支: $branch")
-                executeSteps(runId, getBranchSteps(step.data.config, branch), page, outputs, stepPath + branch, loopDepth)
-                emptyMap<String, String>() to false
+                executeSteps(runId, getBranchSteps(step.data.config, branch), session, outputs, artifacts, stepPath + branch, loopDepth, debug)
+                StepExecutionResult(contextId = session.currentContextId()) to false
             }
 
             "forTimes" -> {
@@ -361,12 +528,12 @@ class RunService(
                     }
                     emitControlFlowLog(runId, stepPath, "ForTimes 第 ${index + 1}/$times 次执行")
                     try {
-                        executeSteps(runId, getRequiredBranchSteps(step, "body"), page, outputs, stepPath + "body", loopDepth + 1)
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), session, outputs, artifacts, stepPath + "body", loopDepth + 1, debug)
                     } catch (_: LoopBreakSignal) {
                         break
                     }
                 }
-                emptyMap<String, String>() to false
+                StepExecutionResult(contextId = session.currentContextId()) to false
             }
 
             "while" -> {
@@ -375,22 +542,81 @@ class RunService(
                 while (iteration < maxIterations && evaluateCondition(step.data.config, outputs)) {
                     emitControlFlowLog(runId, stepPath, "While 第 ${iteration + 1}/$maxIterations 次执行")
                     try {
-                        executeSteps(runId, getRequiredBranchSteps(step, "body"), page, outputs, stepPath + "body", loopDepth + 1)
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), session, outputs, artifacts, stepPath + "body", loopDepth + 1, debug)
                     } catch (_: LoopBreakSignal) {
                         break
                     }
                     iteration++
                 }
-                emptyMap<String, String>() to false
+                StepExecutionResult(contextId = session.currentContextId()) to false
             }
 
-            "break" -> emptyMap<String, String>() to true
+            "forEachElement" -> {
+                val itemVar = resolveRequiredText(step.data.config, "itemVar", outputs)
+                val indexVar = resolveOptionalText(step.data.config, "indexVar", outputs)
+                val items = session.collectForEachElement(step.data.config, outputs)
+                for ((index, item) in items.withIndex()) {
+                    outputs[itemVar] = item
+                    if (!indexVar.isNullOrBlank()) {
+                        outputs[indexVar] = index.toString()
+                    }
+                    emitControlFlowLog(runId, stepPath, "ForEachElement 第 ${index + 1}/${items.size} 次执行")
+                    try {
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), session, outputs, artifacts, stepPath + "body", loopDepth + 1, debug)
+                    } catch (_: LoopBreakSignal) {
+                        break
+                    }
+                }
+                StepExecutionResult(contextId = session.currentContextId()) to false
+            }
 
-            else -> playwrightExecutor.executeStep(page, step) to false
+            "forEachData" -> {
+                val dataVar = resolveRequiredText(step.data.config, "dataVar", outputs)
+                val itemVar = resolveRequiredText(step.data.config, "itemVar", outputs)
+                val indexVar = resolveOptionalText(step.data.config, "indexVar", outputs)
+                val items = resolveLoopData(outputs[dataVar])
+                for ((index, item) in items.withIndex()) {
+                    outputs[itemVar] = item
+                    if (!indexVar.isNullOrBlank()) {
+                        outputs[indexVar] = index.toString()
+                    }
+                    emitControlFlowLog(runId, stepPath, "ForEachData 第 ${index + 1}/${items.size} 次执行")
+                    try {
+                        executeSteps(runId, getRequiredBranchSteps(step, "body"), session, outputs, artifacts, stepPath + "body", loopDepth + 1, debug)
+                    } catch (_: LoopBreakSignal) {
+                        break
+                    }
+                }
+                StepExecutionResult(contextId = session.currentContextId()) to false
+            }
+
+            "startBrowser" -> {
+                val onError = (resolveOptionalText(step.data.config, "onError", outputs) ?: "abort").lowercase()
+                val onComplete = (resolveOptionalText(step.data.config, "onComplete", outputs) ?: "close").lowercase()
+                val contextId = session.pushBrowserContext()
+                try {
+                    executeSteps(runId, getRequiredBranchSteps(step, "body"), session, outputs, artifacts, stepPath + "body", loopDepth + 1, debug)
+                } catch (ex: LoopBreakSignal) {
+                    throw ex
+                } catch (ex: Exception) {
+                    if (onError == "skip") {
+                        emitControlFlowLog(runId, stepPath, "StartBrowser 已跳过错误: ${ex.message}")
+                    } else {
+                        throw ex
+                    }
+                } finally {
+                    session.restorePreviousContext(closeCurrent = onComplete != "keep")
+                }
+                StepExecutionResult(contextId = contextId) to false
+            }
+
+            "break" -> StepExecutionResult(contextId = session.currentContextId()) to true
+
+            else -> session.executeStep(step, outputs) to false
         }
     }
 
-    private fun buildStepPayload(step: com.thetower.models.StepNode, stepPath: List<String>) = buildJsonObject {
+    private fun buildStepPayload(step: StepNode, stepPath: List<String>) = buildJsonObject {
         put("stepId", JsonPrimitive(step.id))
         put("stepType", JsonPrimitive(step.type))
         put("stepPath", stepPath.toJsonArray())
@@ -416,6 +642,75 @@ class RunService(
                 put("level", JsonPrimitive("INFO"))
                 put("message", JsonPrimitive(message))
                 put("stepPath", stepPath.toJsonArray())
+            }
+        )
+    }
+
+    private fun persistStepProgress(
+        runId: String,
+        currentStepId: String,
+        outputs: Map<String, String>,
+        artifacts: List<RunArtifact>
+    ) {
+        val current = getRunById(runId)
+        persistRun(
+            current.copy(
+                currentStepId = currentStepId,
+                outputs = outputs.toMap(),
+                artifacts = artifacts.toList()
+            )
+        )
+    }
+
+    private fun resolveLoopData(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val parsed = runCatching { json.parseToJsonElement(raw) }.getOrNull()
+        if (parsed != null) {
+            return when {
+                parsed is JsonArray -> parsed.map { element ->
+                    if (element is JsonPrimitive && element.isString) element.content else element.toString()
+                }
+
+                parsed is kotlinx.serialization.json.JsonObject -> parsed.entries.map { (key, value) ->
+                    buildJsonObject {
+                        put("key", JsonPrimitive(key))
+                        put("value", value)
+                    }.toString()
+                }
+
+                parsed is JsonPrimitive && parsed.isString -> listOf(parsed.content)
+                else -> listOf(parsed.toString())
+            }
+        }
+        return raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putOutputs(outputs: Map<String, String>) {
+        put(
+            "outputs",
+            buildJsonObject {
+                outputs.forEach { (key, value) ->
+                    put(key, JsonPrimitive(value))
+                }
+            }
+        )
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putArtifacts(artifacts: List<RunArtifact>) {
+        put(
+            "artifacts",
+            buildJsonArray {
+                artifacts.forEach { artifact ->
+                    add(
+                        buildJsonObject {
+                            put("artifactId", JsonPrimitive(artifact.artifactId))
+                            put("name", JsonPrimitive(artifact.name))
+                            put("kind", JsonPrimitive(artifact.kind))
+                            put("relativePath", JsonPrimitive(artifact.relativePath))
+                            put("createdAt", JsonPrimitive(artifact.createdAt))
+                        }
+                    )
+                }
             }
         )
     }
@@ -449,9 +744,197 @@ class RunService(
 
     private fun cleanupRuntime(runId: String) {
         runningJobs.remove(runId)
+        stopDebugPreviewLoop(runId)
+        activeDebugSessions.remove(runId)
+        debugPreviewLocks.remove(runId)
         eventFlows.remove(runId)
         seqCounters.remove(runId)
         runRequestIds.remove(runId)
+        runDebugOptions.remove(runId)
+        runDebugSessions.remove(runId)
+        closedDebugRuns.remove(runId)
+    }
+
+    private fun normalizeDebugOptions(debug: RunDebugOptions?): RunDebugOptions? {
+        if (debug?.enabled != true) return null
+        if (debug.previewFps !in 1..4) {
+            throw BadRequestException("previewFps 必须在 1 到 4 之间", mapOf("code" to ErrorCodes.DEBUG_OPTIONS_INVALID, "field" to "debug.previewFps"))
+        }
+        if (debug.previewQuality !in 20..90) {
+            throw BadRequestException("previewQuality 必须在 20 到 90 之间", mapOf("code" to ErrorCodes.DEBUG_OPTIONS_INVALID, "field" to "debug.previewQuality"))
+        }
+        return debug
+    }
+
+    private fun ensureDebugPreviewLoop(runId: String, session: PlaywrightRunSession, debug: RunDebugOptions): Job {
+        debugPreviewJobs[runId]?.let { existing ->
+            if (existing.isActive) {
+                return existing
+            }
+        }
+
+        val frameIntervalMs = (1_000L / debug.previewFps.coerceAtLeast(1)).coerceAtLeast(250L)
+        val job = scope.launch(Dispatchers.IO) {
+            while (isActive && activeDebugSessions[runId] === session) {
+                if (!closedDebugRuns.contains(runId)) {
+                    emitDebugPreview(runId, session, debug)
+                }
+                delay(frameIntervalMs)
+            }
+        }
+        debugPreviewJobs[runId] = job
+        return job
+    }
+
+    private fun stopDebugPreviewLoop(runId: String) {
+        val job = debugPreviewJobs.remove(runId) ?: return
+        runBlocking {
+            job.cancelAndJoin()
+        }
+    }
+
+    private fun RunDebugOptions.toSession(
+        status: DebugSessionStatus,
+        pageAlias: String? = null,
+        contextId: String? = null,
+        lastFrameTs: String? = null,
+        lastError: String? = null
+    ): RunDebugSession {
+        return RunDebugSession(
+            enabled = enabled,
+            openVisibleBrowser = openVisibleBrowser,
+            openDevtools = openDevtools,
+            previewFps = previewFps,
+            previewQuality = previewQuality,
+            status = status,
+            pageAlias = pageAlias,
+            contextId = contextId,
+            lastFrameTs = lastFrameTs,
+            lastError = lastError
+        )
+    }
+
+    private fun emitDebugSessionStarted(runId: String, debug: RunDebugOptions) {
+        runDebugSessions[runId] = debug.toSession(status = DebugSessionStatus.STARTING)
+        emit(
+            runId,
+            EventType.DEBUG_SESSION_STARTED,
+            buildJsonObject {
+                put("enabled", JsonPrimitive(true))
+                put("status", JsonPrimitive(DebugSessionStatus.STARTING.name))
+                put("openVisibleBrowser", JsonPrimitive(debug.openVisibleBrowser))
+                put("openDevtools", JsonPrimitive(debug.openDevtools))
+                put("previewFps", JsonPrimitive(debug.previewFps))
+                put("previewQuality", JsonPrimitive(debug.previewQuality))
+            }
+        )
+    }
+
+    private fun emitDebugStatus(
+        runId: String,
+        status: DebugSessionStatus,
+        message: String,
+        pageAlias: String? = null,
+        contextId: String? = null,
+        lastError: String? = null
+    ) {
+        val options = runDebugOptions[runId] ?: return
+        val now = nowIso()
+        val session = options.toSession(status, pageAlias, contextId, runDebugSessions[runId]?.lastFrameTs, lastError)
+        runDebugSessions[runId] = session
+        emit(
+            runId,
+            EventType.DEBUG_STATUS_CHANGED,
+            buildJsonObject {
+                put("status", JsonPrimitive(status.name))
+                put("message", JsonPrimitive(message))
+                put("pageAlias", pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                put("contextId", contextId?.let(::JsonPrimitive) ?: JsonNull)
+                put("ts", JsonPrimitive(now))
+            }
+        )
+    }
+
+    private fun emitDebugPreview(runId: String, session: PlaywrightRunSession, debug: RunDebugOptions) {
+        val lock = debugPreviewLocks.computeIfAbsent(runId) { Any() }
+        synchronized(lock) {
+            if (closedDebugRuns.contains(runId)) return
+            val frame = session.capturePreviewFrame(debug.previewQuality) ?: return
+            val now = nowIso()
+            runDebugSessions[runId] = debug.toSession(
+                status = DebugSessionStatus.STREAMING,
+                pageAlias = frame.pageAlias,
+                contextId = frame.contextId,
+                lastFrameTs = now,
+                lastError = runDebugSessions[runId]?.lastError
+            )
+            emit(
+                runId,
+                EventType.DEBUG_FRAME,
+                buildJsonObject {
+                    put("mimeType", JsonPrimitive(frame.mimeType))
+                    put("frameBase64", JsonPrimitive(frame.frameBase64))
+                    put("width", JsonPrimitive(frame.width))
+                    put("height", JsonPrimitive(frame.height))
+                    put("pageAlias", frame.pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                    put("contextId", JsonPrimitive(frame.contextId))
+                    put("ts", JsonPrimitive(now))
+                }
+            )
+        }
+    }
+
+    private fun emitDebugError(
+        runId: String,
+        message: String,
+        stepPath: List<String>? = null,
+        stepId: String? = null,
+        pageAlias: String? = null,
+        contextId: String? = null
+    ) {
+        val options = runDebugOptions[runId] ?: return
+        runDebugSessions[runId] = options.toSession(
+            status = DebugSessionStatus.ERROR,
+            pageAlias = pageAlias,
+            contextId = contextId,
+            lastFrameTs = runDebugSessions[runId]?.lastFrameTs,
+            lastError = message
+        )
+        emit(
+            runId,
+            EventType.DEBUG_ERROR,
+            buildJsonObject {
+                put("message", JsonPrimitive(message))
+                put("stepId", stepId?.let(::JsonPrimitive) ?: JsonNull)
+                put("pageAlias", pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                put("contextId", contextId?.let(::JsonPrimitive) ?: JsonNull)
+                put("stepPath", stepPath?.toJsonArray() ?: buildJsonArray { })
+            }
+        )
+    }
+
+    private fun closeDebugSession(runId: String, summary: String, errorMessage: String? = null) {
+        val options = runDebugOptions[runId] ?: return
+        val current = runDebugSessions[runId]
+        runDebugSessions[runId] = options.toSession(
+            status = if (errorMessage == null) DebugSessionStatus.CLOSED else DebugSessionStatus.ERROR,
+            pageAlias = current?.pageAlias,
+            contextId = current?.contextId,
+            lastFrameTs = current?.lastFrameTs,
+            lastError = errorMessage
+        )
+        emit(
+            runId,
+            EventType.DEBUG_SESSION_CLOSED,
+            buildJsonObject {
+                put("status", JsonPrimitive(runDebugSessions[runId]?.status?.name ?: DebugSessionStatus.CLOSED.name))
+                put("summary", JsonPrimitive(summary))
+                put("pageAlias", current?.pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                put("contextId", current?.contextId?.let(::JsonPrimitive) ?: JsonNull)
+                put("lastFrameTs", current?.lastFrameTs?.let(::JsonPrimitive) ?: JsonNull)
+                put("error", errorMessage?.let(::JsonPrimitive) ?: JsonNull)
+            }
+        )
     }
 
     private fun persistRun(run: Run): Run {

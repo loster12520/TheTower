@@ -100,9 +100,89 @@ test('editor should block running an invalid workflow from blank template', asyn
   await expect(page.locator('.react-flow__node')).toHaveCount(1);
   await page.locator('.react-flow__node').first().click();
 
-  await page.getByRole('button', { name: '运行' }).click();
+  await page.locator('.editor-toolbar').getByRole('button', { name: /运行/ }).first().click();
 
   const errorDialog = page.getByRole('dialog', { name: '配置有误，无法运行' });
   await expect(errorDialog).toBeVisible();
   await expect(errorDialog.getByText('打开网页: URL 不能为空')).toBeVisible();
+});
+
+test('editor should render left right handles and keep node stable when selected', async ({ page }) => {
+  const templateName = `回归端口布局-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证左右端口与无抖动选中态');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+
+  const node = page.locator('.react-flow__node').first();
+  await expect(node).toBeVisible();
+  await expect(node.locator('[data-handle-position="left"]')).toHaveCount(1);
+  await expect(node.locator('[data-handle-position="right"]')).toHaveCount(1);
+
+  const beforeSelect = await node.boundingBox();
+  if (!beforeSelect) {
+    throw new Error('无法获取选中前节点位置');
+  }
+
+  await node.click();
+  const afterSelect = await node.boundingBox();
+  if (!afterSelect) {
+    throw new Error('无法获取选中后节点位置');
+  }
+
+  expect(Math.abs(afterSelect.x - beforeSelect.x)).toBeLessThan(1);
+  expect(Math.abs(afterSelect.y - beforeSelect.y)).toBeLessThan(1);
+  expect(Math.abs(afterSelect.width - beforeSelect.width)).toBeLessThan(1);
+  expect(Math.abs(afterSelect.height - beforeSelect.height)).toBeLessThan(1);
+});
+
+test('editor should support copy paste undo and redo for selected nodes', async ({ page }) => {
+  const templateName = `回归剪贴板-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证复制粘贴与历史');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+
+  const nodes = page.locator('.react-flow__node');
+  await expect(nodes).toHaveCount(1);
+
+  await nodes.first().click();
+  await page.keyboard.press('ControlOrMeta+C');
+  await page.keyboard.press('ControlOrMeta+V');
+  await expect(nodes).toHaveCount(2);
+
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect(nodes).toHaveCount(1);
+
+  await page.keyboard.press('ControlOrMeta+Shift+Z');
+  await expect(nodes).toHaveCount(2);
+});
+
+test('editor should auto connect nearby nodes after dragging', async ({ page }) => {
+  const templateName = `回归自动连线-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证近距离自动连线');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+  await dragNodeToCanvas(page, '等待', { x: 540, y: 140 });
+
+  const nodes = page.locator('.react-flow__node');
+  await expect(nodes).toHaveCount(2);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0);
+
+  const firstBox = await nodes.nth(0).boundingBox();
+  const secondBox = await nodes.nth(1).boundingBox();
+
+  if (!firstBox || !secondBox) {
+    throw new Error('无法获取节点位置');
+  }
+
+  const startX = secondBox.x + secondBox.width / 2;
+  const startY = secondBox.y + secondBox.height / 2;
+  const targetX = firstBox.x + firstBox.width - 8 + secondBox.width / 2;
+  const targetY = firstBox.y + firstBox.height / 2;
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(targetX, targetY, { steps: 12 });
+  await page.mouse.up();
+
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1);
 });

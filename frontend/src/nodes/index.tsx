@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Button, Card, Space, Tag } from 'antd';
 import { observer } from 'mobx-react-lite';
 import { EditOutlined } from '@ant-design/icons';
-import { NODE_TYPES } from '@/stores/editorStore';
+import { NODE_DEFINITIONS } from '@/models/stepRegistry';
 import type { NodeType } from '@/stores/editorStore';
 import { runStore } from '@/stores/runStore';
 import { editorStore } from '@/stores/editorStore';
@@ -133,7 +133,7 @@ const SubflowPreview: React.FC<{
 
 // 自定义节点组件
 const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected, type }) => {
-  const nodeType = NODE_TYPES.find(n => n.type === type as NodeType);
+  const nodeType = NODE_DEFINITIONS.find(n => n.type === type as NodeType);
   const color = nodeType?.color || '#999';
   const { stepStatus, pathActive } = getNodeState(id);
   const borderColor = getNodeBorder(selected, color, stepStatus?.status, pathActive);
@@ -141,18 +141,21 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
   return (
     <Card
       size="small"
+      className={selected ? 'editor-flow-node editor-flow-node--selected' : 'editor-flow-node'}
       style={{
         minWidth: 150,
         borderColor,
-        borderWidth: selected ? 2 : 1,
-        boxShadow: stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
+        borderWidth: 2,
+        boxShadow: selected || stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
       }}
       styles={{ body: { padding: '8px 12px' } }}
     >
       {/* 输入连接点 */}
       <Handle
         type="target"
-        position={Position.Top}
+        position={Position.Left}
+        data-testid={`${id}-target-handle`}
+        data-handle-position="left"
         style={{
           width: 10,
           height: 10,
@@ -183,7 +186,9 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
       {/* 输出连接点 */}
       <Handle
         type="source"
-        position={Position.Bottom}
+        position={Position.Right}
+        data-testid={`${id}-source-handle`}
+        data-handle-position="right"
         style={{
           width: 10,
           height: 10,
@@ -196,7 +201,7 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
 };
 
 const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected, type }) => {
-  const nodeType = NODE_TYPES.find(n => n.type === type as NodeType);
+  const nodeType = NODE_DEFINITIONS.find(n => n.type === type as NodeType);
   const color = nodeType?.color || '#999';
   const { stepStatus, nestedStatus, pathActive } = getNodeState(id);
   const borderColor = getNodeBorder(selected, color, stepStatus?.status, pathActive);
@@ -214,15 +219,22 @@ const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selec
   return (
     <Card
       size="small"
+      className={selected ? 'editor-flow-node editor-flow-node--selected' : 'editor-flow-node'}
       style={{
         minWidth: 240,
         borderColor: borderColor,
-        borderWidth: selected ? 2 : 1,
-        boxShadow: stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
+        borderWidth: 2,
+        boxShadow: selected || stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
       }}
       styles={{ body: { padding: '10px 12px' } }}
     >
-      <Handle type="target" position={Position.Top} style={{ width: 10, height: 10, background: color, border: '2px solid #fff' }} />
+      <Handle
+        type="target"
+        position={Position.Left}
+        data-testid={`${id}-target-handle`}
+        data-handle-position="left"
+        style={{ width: 10, height: 10, background: color, border: '2px solid #fff' }}
+      />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <span style={{ fontSize: 18 }}>{nodeType?.icon}</span>
@@ -290,7 +302,13 @@ const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selec
         </div>
       </div>
 
-      <Handle type="source" position={Position.Bottom} style={{ width: 10, height: 10, background: color, border: '2px solid #fff' }} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        data-testid={`${id}-source-handle`}
+        data-handle-position="right"
+        style={{ width: 10, height: 10, background: color, border: '2px solid #fff' }}
+      />
     </Card>
   );
 };
@@ -306,8 +324,30 @@ export const nodeTypes = {
   type: CustomNode,
   waitFor: CustomNode,
   extract: CustomNode,
+  newPage: CustomNode,
+  closePage: CustomNode,
+  switchPage: CustomNode,
+  reloadPage: CustomNode,
+  screenshotPage: CustomNode,
+  hover: CustomNode,
+  focus: CustomNode,
+  selectOption: CustomNode,
+  scrollPage: CustomNode,
+  uploadFiles: CustomNode,
+  executeJs: CustomNode,
+  waitForResponse: CustomNode,
+  getUrl: CustomNode,
+  downloadFile: CustomNode,
+  importText: CustomNode,
+  totp: CustomNode,
+  getCookies: CustomNode,
+  clearCookies: CustomNode,
   if: ContainerNode,
   forTimes: ContainerNode,
+  forEachElement: ContainerNode,
+  forEachData: ContainerNode,
+  startBrowser: ContainerNode,
+  closeBrowser: CustomNode,
   while: ContainerNode,
   break: CustomNode,
 };

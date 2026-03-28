@@ -28,4 +28,10 @@ interface RunEntity {
 
     @Column(name = "error_json")
     val errorJson: String?
+
+    @Column(name = "outputs_json")
+    val outputsJson: String?
+
+    @Column(name = "artifacts_json")
+    val artifactsJson: String?
 }

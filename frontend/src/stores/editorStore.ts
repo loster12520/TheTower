@@ -1,24 +1,14 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import type { Node, Edge, Connection, XYPosition } from '@xyflow/react';
 import { templateApi } from '@/services/api';
-import { graphToSteps, stepsToGraph, createNode as createNewNode } from '@/utils/canvasConverter';
+import { graphToSteps, stepsToGraph, createNode as createNewNode, generateId } from '@/utils/canvasConverter';
 import { validateCanvas } from '@/utils/validator';
-import type { WorkflowTemplate, ApiError, Step } from '@/models';
+import { NODE_DEFINITIONS } from '@/models/stepRegistry';
+import type { WorkflowTemplate, ApiError, Step, StepType } from '@/models';
 
-// 节点类型定义
-export type NodeType = 'openUrl' | 'click' | 'type' | 'waitFor' | 'extract' | 'if' | 'forTimes' | 'while' | 'break';
+export type NodeType = StepType;
 
-export const NODE_TYPES: { type: NodeType; label: string; color: string; icon: string; isContainer?: boolean }[] = [
-  { type: 'openUrl', label: '打开网页', color: '#1890ff', icon: '🌐' },
-  { type: 'click', label: '点击元素', color: '#52c41a', icon: '👆' },
-  { type: 'type', label: '输入文本', color: '#faad14', icon: '⌨️' },
-  { type: 'waitFor', label: '等待', color: '#722ed1', icon: '⏱️' },
-  { type: 'extract', label: '提取数据', color: '#eb2f96', icon: '📋' },
-  { type: 'if', label: 'IF 条件', color: '#0f766e', icon: '🔀', isContainer: true },
-  { type: 'forTimes', label: 'For 次数', color: '#2563eb', icon: '🔁', isContainer: true },
-  { type: 'while', label: 'While 循环', color: '#7c3aed', icon: '♾️', isContainer: true },
-  { type: 'break', label: '退出循环', color: '#dc2626', icon: '⛔' },
-];
+export const NODE_TYPES = NODE_DEFINITIONS;
 
 type BranchType = 'then' | 'else' | 'body';
 
@@ -30,6 +20,19 @@ interface FlowGraph {
 interface ActiveSubflow {
   nodeId: string;
   branch: BranchType;
+}
+
+interface ClipboardGraph {
+  nodes: Node[];
+  edges: Edge[];
+}
+
+interface EditorSnapshot {
+  rootNodes: Node[];
+  rootEdges: Edge[];
+  subflowGraphMap: Record<string, Partial<Record<BranchType, FlowGraph>>>;
+  activeSubflow: ActiveSubflow | null;
+  selectedNodeId: string | null;
 }
 
 const isBranchType = (value: string): value is BranchType => value === 'then' || value === 'else' || value === 'body';
@@ -52,6 +55,18 @@ const cloneGraph = (graph: FlowGraph): FlowGraph => ({
   edges: cloneEdges(graph.edges),
 });
 
+const cloneSubflowGraphMap = (graphMap: Record<string, Partial<Record<BranchType, FlowGraph>>>) => Object.fromEntries(
+  Object.entries(graphMap).map(([nodeId, branches]) => [
+    nodeId,
+    Object.fromEntries(
+      Object.entries(branches).map(([branch, graph]) => [
+        branch,
+        graph ? cloneGraph(graph) : graph,
+      ]),
+    ) as Partial<Record<BranchType, FlowGraph>>,
+  ]),
+) as Record<string, Partial<Record<BranchType, FlowGraph>>>;
+
 class EditorStore {
   // 画布数据
   nodes: Node[] = [];
@@ -72,6 +87,11 @@ class EditorStore {
   saving = false;
   isDirty = false;
   error: string | null = null;
+
+  // 编辑器体验增强
+  clipboard: ClipboardGraph | null = null;
+  pastSnapshots: EditorSnapshot[] = [];
+  futureSnapshots: EditorSnapshot[] = [];
 
   // 运行状态
   isRunning = false;
@@ -122,7 +142,10 @@ class EditorStore {
       return false;
     }
 
-    return this.activeSubflowNode?.type === 'forTimes' || this.activeSubflowNode?.type === 'while';
+    return this.activeSubflowNode?.type === 'forTimes'
+      || this.activeSubflowNode?.type === 'while'
+      || this.activeSubflowNode?.type === 'forEachElement'
+      || this.activeSubflowNode?.type === 'forEachData';
   }
 
   get availableNodeTypes() {
@@ -139,6 +162,22 @@ class EditorStore {
     }
 
     return '当前拖拽将投递到激活的子流程中。';
+  }
+
+  get canCopySelection() {
+    return this.selectedNode !== null;
+  }
+
+  get canPasteSelection() {
+    return (this.clipboard?.nodes.length || 0) > 0;
+  }
+
+  get canUndo() {
+    return this.pastSnapshots.length > 0;
+  }
+
+  get canRedo() {
+    return this.futureSnapshots.length > 0;
   }
 
   // ========== 数据加载 ==========
@@ -167,6 +206,9 @@ class EditorStore {
         this.subflowGraphMap = {};
         this.selectedNode = null;
         this.isDirty = false;
+        this.clipboard = null;
+        this.pastSnapshots = [];
+        this.futureSnapshots = [];
       });
 
       return true;
@@ -196,7 +238,7 @@ class EditorStore {
 
     try {
       await templateApi.saveSteps(this.templateId, {
-        schemaVersion: '0.0.4',
+        schemaVersion: '0.0.6',
         steps: steps as Step[],
         otherStep
       });
@@ -227,11 +269,13 @@ class EditorStore {
       return;
     }
 
+    this.captureSnapshot();
     const newNode = createNewNode(type, position, nodeType.label);
     
     runInAction(() => {
       this.nodes = [...this.nodes, newNode];
       this.syncCurrentCanvas(false);
+      this.selectedNode = newNode;
       this.isDirty = true;
     });
 
@@ -240,6 +284,7 @@ class EditorStore {
 
   // 更新节点数据
   updateNodeData(nodeId: string, data: Record<string, unknown>) {
+    this.captureSnapshot();
     runInAction(() => {
       const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
       if (nodeIndex !== -1) {
@@ -257,6 +302,7 @@ class EditorStore {
 
   // 删除节点
   deleteNode(nodeId: string) {
+    this.captureSnapshot();
     runInAction(() => {
       this.nodes = this.nodes.filter(n => n.id !== nodeId);
       this.edges = this.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
@@ -277,6 +323,7 @@ class EditorStore {
 
   // 更新节点位置
   updateNodePosition(nodeId: string, position: XYPosition) {
+    this.captureSnapshot();
     runInAction(() => {
       const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
       if (nodeIndex !== -1) {
@@ -295,31 +342,40 @@ class EditorStore {
   // ========== 连线操作 ==========
 
   // 添加连线（0.0.1 限制为线性流程）
-  addEdge(connection: Connection): boolean {
+  addEdge(connection: Connection, options?: { silent?: boolean }): boolean {
     const { source, target } = connection;
 
     if (!source || !target) return false;
 
+    const silent = options?.silent ?? false;
+
     // 检查是否已存在从 source 出发的边（单出边限制）
     const existingSourceEdge = this.edges.find(e => e.source === source);
     if (existingSourceEdge) {
-      this.setError('每个节点只能有一个出边（线性流程限制）');
+      if (!silent) {
+        this.setError('每个节点只能有一个出边（线性流程限制）');
+      }
       return false;
     }
 
     // 检查是否已存在指向 target 的边（单入边限制）
     const existingTargetEdge = this.edges.find(e => e.target === target);
     if (existingTargetEdge) {
-      this.setError('每个节点只能有一个入边（线性流程限制）');
+      if (!silent) {
+        this.setError('每个节点只能有一个入边（线性流程限制）');
+      }
       return false;
     }
 
     // 检查是否形成自环
     if (source === target) {
-      this.setError('不能连接到自己');
+      if (!silent) {
+        this.setError('不能连接到自己');
+      }
       return false;
     }
 
+    this.captureSnapshot();
     runInAction(() => {
       const newEdge: Edge = {
         id: `edge-${source}-${target}`,
@@ -330,7 +386,9 @@ class EditorStore {
       this.edges = [...this.edges, newEdge];
       this.syncCurrentCanvas(false);
       this.isDirty = true;
-      this.error = null; // 清除错误
+      if (!silent) {
+        this.error = null;
+      }
     });
 
     return true;
@@ -338,6 +396,7 @@ class EditorStore {
 
   // 删除连线
   deleteEdge(edgeId: string) {
+    this.captureSnapshot();
     runInAction(() => {
       this.edges = this.edges.filter(e => e.id !== edgeId);
       this.syncCurrentCanvas(false);
@@ -349,6 +408,7 @@ class EditorStore {
 
   // 设置整个画布数据
   setCanvas(nodes: Node[], edges: Edge[]) {
+    this.captureSnapshot();
     this.nodes = cloneNodes(nodes);
     this.edges = cloneEdges(edges);
     this.syncCurrentCanvas(false);
@@ -357,11 +417,110 @@ class EditorStore {
 
   // 清空画布
   clearCanvas() {
+    this.captureSnapshot();
     this.nodes = [];
     this.edges = [];
     this.selectedNode = null;
     this.syncCurrentCanvas(false);
     this.isDirty = true;
+  }
+
+  copySelection(): boolean {
+    if (!this.selectedNode) {
+      return false;
+    }
+
+    const selectedIds = new Set([this.selectedNode.id]);
+    this.clipboard = {
+      nodes: cloneNodes(this.nodes.filter((node) => selectedIds.has(node.id))),
+      edges: cloneEdges(this.edges.filter((edge) => selectedIds.has(edge.source) && selectedIds.has(edge.target))),
+    };
+    return true;
+  }
+
+  cutSelection(): boolean {
+    if (!this.copySelection() || !this.selectedNode) {
+      return false;
+    }
+
+    this.deleteNode(this.selectedNode.id);
+    return true;
+  }
+
+  pasteSelection(offset: XYPosition = { x: 48, y: 48 }): boolean {
+    if (!this.clipboard || this.clipboard.nodes.length === 0) {
+      return false;
+    }
+
+    this.captureSnapshot();
+    const idMap = new Map<string, string>();
+    const pastedNodes = this.clipboard.nodes.map((node) => {
+      const nextId = generateId();
+      idMap.set(node.id, nextId);
+      return {
+        ...node,
+        id: nextId,
+        position: {
+          x: node.position.x + offset.x,
+          y: node.position.y + offset.y,
+        },
+        data: {
+          ...node.data,
+          label: `${node.data.label as string} 副本`,
+          config: cloneConfig((node.data?.config as Record<string, unknown>) || {}),
+        },
+      } as Node;
+    });
+
+    const pastedEdges = this.clipboard.edges
+      .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+      .map((edge) => ({
+        ...edge,
+        id: `edge-${idMap.get(edge.source)}-${idMap.get(edge.target)}`,
+        source: idMap.get(edge.source)!,
+        target: idMap.get(edge.target)!,
+      }));
+
+    runInAction(() => {
+      this.nodes = [...this.nodes, ...pastedNodes];
+      this.edges = [...this.edges, ...pastedEdges];
+      this.selectedNode = pastedNodes[pastedNodes.length - 1] || null;
+      this.syncCurrentCanvas(false);
+      this.isDirty = true;
+      this.error = null;
+    });
+
+    return true;
+  }
+
+  undo(): boolean {
+    if (!this.canUndo) {
+      return false;
+    }
+
+    const snapshot = this.pastSnapshots.pop();
+    if (!snapshot) {
+      return false;
+    }
+
+    this.futureSnapshots.push(this.createSnapshot());
+    this.restoreSnapshot(snapshot);
+    return true;
+  }
+
+  redo(): boolean {
+    if (!this.canRedo) {
+      return false;
+    }
+
+    const snapshot = this.futureSnapshots.pop();
+    if (!snapshot) {
+      return false;
+    }
+
+    this.pastSnapshots.push(this.createSnapshot());
+    this.restoreSnapshot(snapshot);
+    return true;
   }
 
   enterSubflow(nodeId: string, branch: BranchType) {
@@ -567,6 +726,61 @@ class EditorStore {
     }
     this.subflowGraphMap[nodeId][branch] = cloneGraph(graph);
     return graph;
+  }
+
+  private captureSnapshot() {
+    const snapshot = this.createSnapshot();
+    const previous = this.pastSnapshots[this.pastSnapshots.length - 1];
+    if (previous && this.isSameSnapshot(previous, snapshot)) {
+      return;
+    }
+
+    this.pastSnapshots.push(snapshot);
+    if (this.pastSnapshots.length > 80) {
+      this.pastSnapshots.shift();
+    }
+    this.futureSnapshots = [];
+  }
+
+  private createSnapshot(): EditorSnapshot {
+    this.syncCurrentCanvas(false);
+    return {
+      rootNodes: cloneNodes(this.rootNodes),
+      rootEdges: cloneEdges(this.rootEdges),
+      subflowGraphMap: cloneSubflowGraphMap(this.subflowGraphMap),
+      activeSubflow: this.activeSubflow ? { ...this.activeSubflow } : null,
+      selectedNodeId: this.selectedNode?.id || null,
+    };
+  }
+
+  private restoreSnapshot(snapshot: EditorSnapshot) {
+    runInAction(() => {
+      this.rootNodes = cloneNodes(snapshot.rootNodes);
+      this.rootEdges = cloneEdges(snapshot.rootEdges);
+      this.subflowGraphMap = cloneSubflowGraphMap(snapshot.subflowGraphMap);
+      this.activeSubflow = snapshot.activeSubflow ? { ...snapshot.activeSubflow } : null;
+
+      if (this.activeSubflow) {
+        const graph = this.subflowGraphMap[this.activeSubflow.nodeId]?.[this.activeSubflow.branch];
+        this.nodes = cloneNodes(graph?.nodes || []);
+        this.edges = cloneEdges(graph?.edges || []);
+      } else {
+        this.nodes = cloneNodes(this.rootNodes);
+        this.edges = cloneEdges(this.rootEdges);
+      }
+
+      this.selectedNode = snapshot.selectedNodeId
+        ? this.nodes.find((node) => node.id === snapshot.selectedNodeId)
+          || this.rootNodes.find((node) => node.id === snapshot.selectedNodeId)
+          || null
+        : null;
+      this.isDirty = true;
+      this.error = null;
+    });
+  }
+
+  private isSameSnapshot(left: EditorSnapshot, right: EditorSnapshot): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 }
 

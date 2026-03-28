@@ -339,6 +339,7 @@ export default {
       id: t.id,
       name: t.name,
       description: t.description,
+      schemaVersion: t.schemaVersion,
       updatedAt: t.updatedAt,
       stats: t.stats,
       lastRun: includeLastRun ? t.lastRun : undefined
@@ -355,7 +356,7 @@ export default {
       id: `tpl-${generateId()}`,
       name: body.name || '未命名模板',
       description: body.description || null,
-      schemaVersion: body.schemaVersion || '0.0.4',
+      schemaVersion: body.schemaVersion || '0.0.6',
       steps: body.steps || [],
       otherStep: body.otherStep || { nodes: [], edges: [] },
       createdAt: now,

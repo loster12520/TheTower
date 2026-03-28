@@ -25,7 +25,7 @@ fun Application.runRoutes(runService: RunService) {
         route("/api/v1/runs") {
             post {
                 val request = call.receive<StartRunRequest>()
-                val data = runService.startRun(request.templateId, request.dryRun, call.requestId())
+                val data = runService.startRun(request.templateId, request.dryRun, call.requestId(), request.debug)
                 call.respond(
                     HttpStatusCode.OK,
                     data.success(call.requestId())
@@ -74,6 +74,24 @@ fun Application.runRoutes(runService: RunService) {
                 call.respond(
                     HttpStatusCode.OK,
                     data.success(call.requestId())
+                )
+            }
+
+            post("/{id}/debug/open-browser") {
+                val id = call.parameters["id"] ?: ""
+                val session = runService.openDebugBrowser(id)
+                call.respond(
+                    HttpStatusCode.OK,
+                    session.success(call.requestId())
+                )
+            }
+
+            post("/{id}/debug/close") {
+                val id = call.parameters["id"] ?: ""
+                val session = runService.closeDebugChannel(id)
+                call.respond(
+                    HttpStatusCode.OK,
+                    session.success(call.requestId())
                 )
             }
 

@@ -7,6 +7,10 @@
   margin-bottom: 24px;
 }
 
+.home-page__header .ant-typography {
+  margin-bottom: 0;
+}
+
 .home-page__actions {
   margin-bottom: 24px;
 }
@@ -38,6 +42,18 @@
 
 .home-page__card-time {
   font-size: 12px;
+}
+
+.home-page__schema-tag {
+  margin-inline-end: 0;
+}
+
+.home-page__default-version-tag {
+  font-weight: 600;
+}
+
+.home-page__modal-hint {
+  display: block;
 }
 
 .template-card {

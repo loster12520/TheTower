@@ -4,6 +4,7 @@ import { Alert, Button, Card, Form, Input, InputNumber, Radio, Select, Space, Ta
 import { QuestionCircleOutlined } from '@ant-design/icons';
 import { editorStore, NODE_TYPES } from '@/stores/editorStore';
 import type { NodeType } from '@/stores/editorStore';
+import { NODE_DEFINITION_MAP } from '@/models/stepRegistry';
 
 const { Text } = Typography;
 
@@ -289,16 +290,155 @@ const BreakConfig: React.FC<{ config: Record<string, unknown> }> = () => (
   <Alert type="warning" showIcon message="退出循环节点只应放在循环 BODY 中；当前前端将在运行前校验其位置。" />
 );
 
+const ForEachElementConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const bodyCount = Array.isArray(config.body) ? config.body.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const isActive = editorStore.activeSubflow?.nodeId === nodeId && editorStore.activeSubflow.branch === 'body';
+
+  return (
+    <>
+      <Alert type="info" showIcon message="遍历命中的元素集合，并在 BODY 中执行子流程。" style={{ marginBottom: 16 }} />
+      <Form.Item label="元素选择器" name="selector" rules={[{ required: true, message: '请输入元素选择器' }]}>
+        <Input placeholder=".item-card" />
+      </Form.Item>
+      <Form.Item label="项变量名" name="itemVar" rules={[{ required: true, message: '请输入项变量名' }]}>
+        <Input placeholder="item" />
+      </Form.Item>
+      <Form.Item label="索引变量名" name="indexVar">
+        <Input placeholder="index" />
+      </Form.Item>
+      <Form.Item label="提取方式" name="extractType" initialValue={config.extractType || 'text'}>
+        <Select options={[{ label: '文本', value: 'text' }, { label: '属性', value: 'attribute' }, { label: 'HTML', value: 'html' }]} />
+      </Form.Item>
+      <Form.Item label="属性名" name="attributeName">
+        <Input placeholder="href" />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="BODY" count={bodyCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={isActive ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'body')}>
+          编辑 BODY
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const ForEachDataConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const bodyCount = Array.isArray(config.body) ? config.body.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const isActive = editorStore.activeSubflow?.nodeId === nodeId && editorStore.activeSubflow.branch === 'body';
+
+  return (
+    <>
+      <Alert type="info" showIcon message="遍历运行变量中的数据项，并在 BODY 中执行子流程。" style={{ marginBottom: 16 }} />
+      <Form.Item label="数据变量名" name="dataVar" rules={[{ required: true, message: '请输入数据变量名' }]}>
+        <Input placeholder="items" />
+      </Form.Item>
+      <Form.Item label="项变量名" name="itemVar" rules={[{ required: true, message: '请输入项变量名' }]}>
+        <Input placeholder="item" />
+      </Form.Item>
+      <Form.Item label="索引变量名" name="indexVar">
+        <Input placeholder="index" />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="BODY" count={bodyCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={isActive ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'body')}>
+          编辑 BODY
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const StartBrowserConfig: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const bodyCount = Array.isArray(config.body) ? config.body.length : 0;
+  const nodeId = editorStore.selectedNode?.id;
+  const isActive = editorStore.activeSubflow?.nodeId === nodeId && editorStore.activeSubflow.branch === 'body';
+
+  return (
+    <>
+      <Alert type="info" showIcon message="创建独立浏览器上下文，BODY 中的步骤将运行在该上下文内。" style={{ marginBottom: 16 }} />
+      <Form.Item label="环境序列号" name="envSerial">
+        <Input placeholder="预留字段，可留空" />
+      </Form.Item>
+      <Form.Item label="错误处理" name="onError" initialValue={config.onError || 'abort'}>
+        <Select options={[{ label: '终止', value: 'abort' }, { label: '跳过', value: 'skip' }]} />
+      </Form.Item>
+      <Form.Item label="完成后处理" name="onComplete" initialValue={config.onComplete || 'close'}>
+        <Select options={[{ label: '关闭上下文', value: 'close' }, { label: '保留上下文', value: 'keep' }]} />
+      </Form.Item>
+      <Space wrap>
+        <BranchSummary label="BODY" count={bodyCount} />
+      </Space>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Button type={isActive ? 'primary' : 'default'} onClick={() => nodeId && editorStore.enterSubflow(nodeId, 'body')}>
+          编辑 BODY
+        </Button>
+      </Space>
+    </>
+  );
+};
+
+const SchemaConfig: React.FC<{ type: NodeType }> = ({ type }) => {
+  const definition = NODE_DEFINITION_MAP[type];
+  if (!definition?.fields || definition.fields.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      {definition.fields.map((field) => {
+        const rules = field.required ? [{ required: true, message: `请输入${field.label}` }] : undefined;
+
+        switch (field.type) {
+          case 'textarea':
+            return (
+              <Form.Item key={field.name} label={field.label} name={field.name} rules={rules} extra={field.extra}>
+                <Input.TextArea rows={3} placeholder={field.placeholder} />
+              </Form.Item>
+            );
+          case 'number':
+            return (
+              <Form.Item key={field.name} label={field.label} name={field.name} rules={rules} extra={field.extra}>
+                <InputNumber min={field.min} max={field.max} style={{ width: '100%' }} placeholder={field.placeholder} />
+              </Form.Item>
+            );
+          case 'select':
+            return (
+              <Form.Item key={field.name} label={field.label} name={field.name} rules={rules} extra={field.extra}>
+                <Select options={field.options} placeholder={field.placeholder} />
+              </Form.Item>
+            );
+          case 'radio':
+            return (
+              <Form.Item key={field.name} label={field.label} name={field.name} rules={rules} extra={field.extra}>
+                <Radio.Group optionType="button" buttonStyle="solid" options={field.options} />
+              </Form.Item>
+            );
+          default:
+            return (
+              <Form.Item key={field.name} label={field.label} name={field.name} rules={rules} extra={field.extra}>
+                <Input placeholder={field.placeholder} />
+              </Form.Item>
+            );
+        }
+      })}
+    </>
+  );
+};
+
 // 配置组件映射
-const configComponents: Record<NodeType, React.FC<{ config: Record<string, unknown> }>> = {
-  openUrl: OpenUrlConfig,
-  click: ClickConfig,
-  type: TypeConfig,
-  waitFor: WaitForConfig,
-  extract: ExtractConfig,
+const configComponents: Partial<Record<NodeType, React.FC<{ config: Record<string, unknown> }>>> = {
   if: IfConfig,
   forTimes: ForTimesConfig,
   while: WhileConfig,
+  forEachElement: ForEachElementConfig,
+  forEachData: ForEachDataConfig,
+  startBrowser: StartBrowserConfig,
   break: BreakConfig,
 };
 
@@ -368,6 +508,7 @@ const NodeConfigPanel: React.FC = observer(() => {
 
   const nodeType = NODE_TYPES.find(n => n.type === node.type as NodeType);
   const ConfigComponent = configComponents[node.type as NodeType];
+  const definition = NODE_DEFINITION_MAP[node.type as NodeType];
   const activeScopeMatches = editorStore.activeSubflow?.nodeId === node.id;
 
   return (
@@ -404,7 +545,7 @@ const NodeConfigPanel: React.FC = observer(() => {
           <Input placeholder="节点名称" />
         </Form.Item>
 
-        {ConfigComponent && <ConfigComponent config={node.data.config} />}
+        {ConfigComponent ? <ConfigComponent config={node.data.config} /> : definition?.formType === 'schema' ? <SchemaConfig type={node.type as NodeType} /> : null}
       </Form>
     </Card>
   );

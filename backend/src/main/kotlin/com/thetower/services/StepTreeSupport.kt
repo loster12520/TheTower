@@ -6,11 +6,13 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -67,7 +69,41 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
                 validateStepTree(getBranchSteps(step.data.config, "else"), loopDepth)
             }
 
-            "forEachElement", "forTimes", "forEachData", "startBrowser" -> {
+            "forEachElement" -> {
+                validateNonBlankText(step, "itemVar")
+                validateSelectorOrElementRef(step)
+                val extractType = step.data.config["extractType"]?.jsonPrimitive?.contentOrNull?.lowercase()
+                if (extractType == "attribute") {
+                    validateNonBlankText(step, "attributeName")
+                }
+                val bodySteps = getRequiredBranchSteps(step, "body")
+                if (bodySteps.isEmpty()) {
+                    throw InvalidStepConfigException("forEachElement.body 不能为空", mapOf("stepId" to step.id, "field" to "body"))
+                }
+                validateStepTree(bodySteps, loopDepth + 1)
+            }
+
+            "forTimes" -> {
+                val times = step.data.config["times"]?.jsonPrimitive?.intOrNull
+                if (times == null || times <= 0) {
+                    throw InvalidStepConfigException("forTimes.times 必须为正整数", mapOf("stepId" to step.id, "field" to "times"))
+                }
+                validateStepTree(getRequiredBranchSteps(step, "body"), loopDepth + 1)
+            }
+
+            "forEachData" -> {
+                validateNonBlankText(step, "dataVar")
+                validateNonBlankText(step, "itemVar")
+                val bodySteps = getRequiredBranchSteps(step, "body")
+                if (bodySteps.isEmpty()) {
+                    throw InvalidStepConfigException("forEachData.body 不能为空", mapOf("stepId" to step.id, "field" to "body"))
+                }
+                validateStepTree(bodySteps, loopDepth + 1)
+            }
+
+            "startBrowser" -> {
+                validateEnum(step, "onError", setOf("skip", "abort"))
+                validateEnum(step, "onComplete", setOf("keep", "close"))
                 validateStepTree(getRequiredBranchSteps(step, "body"), loopDepth + 1)
             }
 
@@ -88,6 +124,34 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
                 }
             }
         }
+    }
+}
+
+private fun validateNonBlankText(step: StepNode, field: String) {
+    val value = step.data.config[field]?.jsonPrimitive?.contentOrNull?.trim()
+    if (value.isNullOrEmpty()) {
+        throw InvalidStepConfigException("${step.type}.$field 不能为空", mapOf("stepId" to step.id, "field" to field))
+    }
+}
+
+private fun validateSelectorOrElementRef(step: StepNode) {
+    val selector = step.data.config["selector"]?.jsonPrimitive?.contentOrNull?.trim()
+    val elementRefVar = step.data.config["elementRefVar"]?.jsonPrimitive?.contentOrNull?.trim()
+    if (selector.isNullOrEmpty() && elementRefVar.isNullOrEmpty()) {
+        throw InvalidStepConfigException(
+            "${step.type} 必须提供 selector 或 elementRefVar",
+            mapOf("stepId" to step.id, "field" to "selector")
+        )
+    }
+}
+
+private fun validateEnum(step: StepNode, field: String, allowedValues: Set<String>) {
+    val value = step.data.config[field]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase() ?: return
+    if (value !in allowedValues) {
+        throw InvalidStepConfigException(
+            "${step.type}.$field 不支持: $value",
+            mapOf("stepId" to step.id, "field" to field)
+        )
     }
 }
 
@@ -149,6 +213,72 @@ internal fun resolveIntConfig(config: JsonObject, field: String, outputs: Map<St
 internal fun resolveOptionalText(config: JsonObject, field: String, outputs: Map<String, String>): String? {
     val raw = config[field]?.jsonPrimitive?.contentOrNull ?: return null
     return resolveTextTemplate(raw, outputs)
+}
+
+internal fun resolveRequiredText(config: JsonObject, field: String, outputs: Map<String, String>): String {
+    return resolveOptionalText(config, field, outputs)
+        ?.takeIf { it.isNotBlank() }
+        ?: throw InvalidStepConfigException("缺少必要参数: $field", mapOf("field" to field))
+}
+
+internal fun resolveOptionalBoolean(config: JsonObject, field: String, outputs: Map<String, String>): Boolean? {
+    val element = config[field] ?: return null
+    val primitive = element as? JsonPrimitive
+        ?: throw InvalidStepConfigException("参数类型非法: $field", mapOf("field" to field))
+
+    primitive.booleanOrNull?.let { return it }
+    val resolved = resolveTextTemplate(primitive.contentOrNull, outputs)?.trim()?.lowercase() ?: return null
+    return when (resolved) {
+        "true", "1", "yes" -> true
+        "false", "0", "no" -> false
+        else -> throw InvalidStepConfigException("参数必须为布尔值: $field", mapOf("field" to field))
+    }
+}
+
+internal fun resolveOptionalInt(config: JsonObject, field: String, outputs: Map<String, String>): Int? {
+    val element = config[field] ?: return null
+    val primitive = element as? JsonPrimitive
+        ?: throw InvalidStepConfigException("参数类型非法: $field", mapOf("field" to field))
+
+    primitive.intOrNull?.let { return it }
+    val resolved = resolveTextTemplate(primitive.contentOrNull, outputs)?.trim() ?: return null
+    return resolved.toIntOrNull()
+        ?: throw InvalidStepConfigException("参数必须为整数: $field", mapOf("field" to field))
+}
+
+internal fun resolveStringList(config: JsonObject, field: String, outputs: Map<String, String>): List<String> {
+    val element = config[field] ?: return emptyList()
+    return when (element) {
+        is JsonPrimitive -> {
+            resolveTextTemplate(element.contentOrNull, outputs)
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?: emptyList()
+        }
+
+        else -> element.jsonArray.mapNotNull { item ->
+            val primitive = item as? JsonPrimitive ?: return@mapNotNull null
+            resolveTextTemplate(primitive.contentOrNull, outputs)?.takeIf { it.isNotBlank() }
+        }
+    }
+}
+
+internal fun resolveSerializedList(raw: String): List<String> {
+    val parsed = runCatching { stepTreeJson.parseToJsonElement(raw) }.getOrNull() ?: return listOf(raw)
+    return when (parsed) {
+        is JsonPrimitive -> listOf(parsed.content)
+        else -> parsed.jsonArray.mapNotNull { element ->
+            val primitive = element as? JsonPrimitive ?: return@mapNotNull element.toString()
+            primitive.contentOrNull ?: element.toString()
+        }
+    }
+}
+
+internal fun serializeStringList(items: List<String>): String {
+    return buildJsonArray {
+        items.forEach { add(JsonPrimitive(it)) }
+    }.toString()
 }
 
 private fun decodeStepList(element: JsonElement, field: String): List<StepNode> {

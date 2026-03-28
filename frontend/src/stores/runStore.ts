@@ -1,6 +1,6 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import { runApi } from '@/services/api';
-import type { Run, ApiError } from '@/models';
+import type { Run, ApiError, RunArtifact, RunDebugOptions, RunDebugSession, DebugPreviewFrame } from '@/models';
 
 // WebSocket 事件类型
 export type EventType = 
@@ -9,6 +9,11 @@ export type EventType =
   | 'STEP_SUCCEEDED'
   | 'STEP_FAILED'
   | 'LOG'
+  | 'DEBUG_SESSION_STARTED'
+  | 'DEBUG_FRAME'
+  | 'DEBUG_STATUS_CHANGED'
+  | 'DEBUG_SESSION_CLOSED'
+  | 'DEBUG_ERROR'
   | 'RUN_SUCCEEDED'
   | 'RUN_FAILED'
   | 'RUN_CANCELED';
@@ -35,6 +40,9 @@ export interface StepStatus {
   stepPath?: string[];
   status: 'pending' | 'running' | 'succeeded' | 'failed';
   outputs?: Record<string, string>;
+  artifacts?: RunArtifact[];
+  pageAlias?: string | null;
+  contextId?: string | null;
   error?: { code: string; message: string };
 }
 
@@ -60,23 +68,28 @@ class RunStore {
   currentStepId: string | null = null;
   currentStepPath: string[] | null = null;
 
+  // 调试预览状态
+  debugSession: RunDebugSession | null = null;
+  latestDebugFrame: DebugPreviewFrame | null = null;
+
   constructor() {
     makeAutoObservable(this);
   }
 
   // 开始运行
-  async startRun(templateId: string): Promise<boolean> {
+  async startRun(templateId: string, options?: { dryRun?: boolean; debug?: RunDebugOptions }): Promise<boolean> {
     this.setLoading(true);
     this.setError(null);
     this.reset();
 
     try {
-      const response = await runApi.start(templateId);
+      const response = await runApi.start(templateId, options?.dryRun ?? false, options?.debug);
       
       runInAction(() => {
         this.currentRun = response.data.run;
         this.wsUrl = response.data.wsUrl;
         this.isRunning = true;
+        this.debugSession = response.data.debug || null;
       });
 
       return true;
@@ -99,6 +112,41 @@ class RunStore {
     } catch (error) {
       const apiError = error as ApiError;
       this.setError(apiError.message || '取消运行失败');
+      return false;
+    }
+  }
+
+  async openDebugBrowser(): Promise<boolean> {
+    if (!this.currentRun) return false;
+
+    try {
+      const response = await runApi.openDebugBrowser(this.currentRun.id);
+      runInAction(() => {
+        this.error = null;
+        this.debugSession = response.data;
+      });
+      return true;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '打开宿主机调试失败');
+      return false;
+    }
+  }
+
+  async closeDebug(): Promise<boolean> {
+    if (!this.currentRun) return false;
+
+    try {
+      const response = await runApi.closeDebug(this.currentRun.id);
+      runInAction(() => {
+        this.error = null;
+        this.debugSession = response.data;
+        this.latestDebugFrame = null;
+      });
+      return true;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '关闭调试预览失败');
       return false;
     }
   }
@@ -140,9 +188,19 @@ class RunStore {
               stepPath: this.currentStepPath,
               status: 'succeeded',
               outputs: event.payload.outputs as Record<string, string>,
+              artifacts: (event.payload.artifacts as RunArtifact[]) || [],
+              pageAlias: (event.payload.pageAlias as string | null | undefined) ?? null,
+              contextId: (event.payload.contextId as string | null | undefined) ?? null,
             };
             this.stepStatusMap.set(stepId, status);
             this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+            if (this.currentRun) {
+              this.currentRun.outputs = {
+                ...this.currentRun.outputs,
+                ...(status.outputs || {}),
+              };
+              this.currentRun.artifacts = [...this.currentRun.artifacts, ...(status.artifacts || [])];
+            }
           }
           break;
 
@@ -171,11 +229,98 @@ class RunStore {
           });
           break;
 
+        case 'DEBUG_SESSION_STARTED':
+          this.debugSession = {
+            enabled: true,
+            openVisibleBrowser: Boolean(event.payload.openVisibleBrowser),
+            openDevtools: Boolean(event.payload.openDevtools),
+            previewFps: Number(event.payload.previewFps || 2),
+            previewQuality: Number(event.payload.previewQuality || 60),
+            status: (event.payload.status as RunDebugSession['status']) || 'STARTING',
+            pageAlias: null,
+            contextId: null,
+            lastFrameTs: null,
+            lastError: null,
+          };
+          break;
+
+        case 'DEBUG_STATUS_CHANGED':
+          this.debugSession = {
+            enabled: this.debugSession?.enabled ?? true,
+            openVisibleBrowser: this.debugSession?.openVisibleBrowser ?? false,
+            openDevtools: this.debugSession?.openDevtools ?? false,
+            previewFps: this.debugSession?.previewFps ?? 2,
+            previewQuality: this.debugSession?.previewQuality ?? 60,
+            status: (event.payload.status as RunDebugSession['status']) || this.debugSession?.status || 'IDLE',
+            pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
+            contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
+            lastFrameTs: (event.payload.ts as string | undefined) ?? this.debugSession?.lastFrameTs ?? null,
+            lastError: this.debugSession?.lastError ?? null,
+          };
+          break;
+
+        case 'DEBUG_FRAME':
+          this.latestDebugFrame = {
+            mimeType: event.payload.mimeType as string,
+            frameBase64: event.payload.frameBase64 as string,
+            width: Number(event.payload.width || 0),
+            height: Number(event.payload.height || 0),
+            pageAlias: (event.payload.pageAlias as string | null | undefined) ?? null,
+            contextId: (event.payload.contextId as string | null | undefined) ?? null,
+            ts: (event.payload.ts as string) || event.ts,
+          };
+          this.debugSession = {
+            enabled: this.debugSession?.enabled ?? true,
+            openVisibleBrowser: this.debugSession?.openVisibleBrowser ?? false,
+            openDevtools: this.debugSession?.openDevtools ?? false,
+            previewFps: this.debugSession?.previewFps ?? 2,
+            previewQuality: this.debugSession?.previewQuality ?? 60,
+            status: 'STREAMING',
+            pageAlias: this.latestDebugFrame.pageAlias ?? this.debugSession?.pageAlias ?? null,
+            contextId: this.latestDebugFrame.contextId ?? this.debugSession?.contextId ?? null,
+            lastFrameTs: this.latestDebugFrame.ts,
+            lastError: this.debugSession?.lastError ?? null,
+          };
+          break;
+
+        case 'DEBUG_SESSION_CLOSED':
+          if (this.debugSession) {
+            this.debugSession = {
+              ...this.debugSession,
+              status: (event.payload.status as RunDebugSession['status']) || 'CLOSED',
+              pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession.pageAlias ?? null,
+              contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession.contextId ?? null,
+              lastFrameTs: (event.payload.lastFrameTs as string | null | undefined) ?? this.debugSession.lastFrameTs ?? null,
+              lastError: (event.payload.error as string | null | undefined) ?? this.debugSession.lastError ?? null,
+            };
+            if (this.debugSession.status === 'CLOSED') {
+              this.latestDebugFrame = null;
+            }
+          }
+          break;
+
+        case 'DEBUG_ERROR':
+          this.debugSession = {
+            enabled: this.debugSession?.enabled ?? true,
+            openVisibleBrowser: this.debugSession?.openVisibleBrowser ?? false,
+            openDevtools: this.debugSession?.openDevtools ?? false,
+            previewFps: this.debugSession?.previewFps ?? 2,
+            previewQuality: this.debugSession?.previewQuality ?? 60,
+            status: 'ERROR',
+            pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
+            contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
+            lastFrameTs: this.debugSession?.lastFrameTs ?? null,
+            lastError: (event.payload.message as string | undefined) ?? this.debugSession?.lastError ?? null,
+          };
+          break;
+
         case 'RUN_SUCCEEDED':
           this.isRunning = false;
           if (this.currentRun) {
             this.currentRun.status = 'SUCCEEDED';
             this.currentRun.finishedAt = event.ts;
+            this.currentRun.outputs = event.payload.outputs as Record<string, string> || this.currentRun.outputs;
+            this.currentRun.artifacts = event.payload.artifacts as RunArtifact[] || this.currentRun.artifacts;
           }
           break;
 
@@ -211,6 +356,8 @@ class RunStore {
     this.currentStepId = null;
     this.currentStepPath = null;
     this.error = null;
+    this.debugSession = null;
+    this.latestDebugFrame = null;
   }
 
   // 获取步骤状态
@@ -276,6 +423,19 @@ class RunStore {
 
   hasPathRunning(pathPrefix: string[]): boolean {
     return this.getPathAggregateStatus(pathPrefix) === 'running';
+  }
+
+  get latestOutputs(): Record<string, string> {
+    return this.currentRun?.outputs || {};
+  }
+
+  get latestArtifacts(): RunArtifact[] {
+    return this.currentRun?.artifacts || [];
+  }
+
+  get debugPreviewUrl(): string | null {
+    if (!this.latestDebugFrame) return null;
+    return `data:${this.latestDebugFrame.mimeType};base64,${this.latestDebugFrame.frameBase64}`;
   }
 
   // 状态设置器

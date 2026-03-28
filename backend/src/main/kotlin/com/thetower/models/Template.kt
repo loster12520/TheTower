@@ -22,6 +22,7 @@ data class TemplateSummary(
     val id: String,
     val name: String,
     val description: String? = null,
+    val schemaVersion: String,
     val updatedAt: String,
     val stats: TemplateStats,
     val lastRun: LastRun? = null
