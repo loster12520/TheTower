@@ -21,11 +21,13 @@ const getNodeState = (id: string) => {
   const stepStatus = runStore.getStepStatus(id);
   const nestedStatus = runStore.getPathAggregateStatus([id]);
   const pathActive = currentPath.includes(id);
+  const paused = runStore.isDebugPaused && pathActive;
 
   return {
     stepStatus: stepStatus || (nestedStatus ? { stepId: id, status: nestedStatus } : undefined),
     nestedStatus,
     pathActive,
+    paused,
   };
 };
 
@@ -135,8 +137,9 @@ const SubflowPreview: React.FC<{
 const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected, type }) => {
   const nodeType = NODE_DEFINITIONS.find(n => n.type === type as NodeType);
   const color = nodeType?.color || '#999';
-  const { stepStatus, pathActive } = getNodeState(id);
+  const { stepStatus, pathActive, paused } = getNodeState(id);
   const borderColor = getNodeBorder(selected, color, stepStatus?.status, pathActive);
+  const hasBreakpoint = data.config?.breakpoint === true;
 
   return (
     <Card
@@ -146,7 +149,11 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
         minWidth: 150,
         borderColor,
         borderWidth: 2,
-        boxShadow: selected || stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
+        boxShadow: paused
+          ? '0 0 0 3px rgba(245, 158, 11, 0.45)'
+          : selected || stepStatus?.status === 'running' || pathActive
+            ? `0 0 0 2px ${color}40`
+            : 'none',
       }}
       styles={{ body: { padding: '8px 12px' } }}
     >
@@ -169,17 +176,20 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
         <span style={{ fontSize: 18 }}>{nodeType?.icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 500, fontSize: 14 }}>{data.label}</div>
-          <Tag
-            style={{
-              marginTop: 4,
-              background: `${color}20`,
-              borderColor: color,
-              color: color,
-              fontSize: 11,
-            }}
-          >
-            {nodeType?.label}
-          </Tag>
+          <Space wrap size={4} style={{ marginTop: 4 }}>
+            <Tag
+              style={{
+                background: `${color}20`,
+                borderColor: color,
+                color: color,
+                fontSize: 11,
+              }}
+            >
+              {nodeType?.label}
+            </Tag>
+            {hasBreakpoint && <Tag color="gold" data-testid={`breakpoint-badge-${id}`}>断点</Tag>}
+            {paused && <Tag color="orange">已暂停</Tag>}
+          </Space>
         </div>
       </div>
 
@@ -203,8 +213,9 @@ const CustomNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected
 const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selected, type }) => {
   const nodeType = NODE_DEFINITIONS.find(n => n.type === type as NodeType);
   const color = nodeType?.color || '#999';
-  const { stepStatus, nestedStatus, pathActive } = getNodeState(id);
+  const { stepStatus, nestedStatus, pathActive, paused } = getNodeState(id);
   const borderColor = getNodeBorder(selected, color, stepStatus?.status, pathActive);
+  const hasBreakpoint = data.config?.breakpoint === true;
   const thenCount = editorStore.getSubflowCount(id, 'then');
   const elseCount = editorStore.getSubflowCount(id, 'else');
   const bodyCount = editorStore.getSubflowCount(id, 'body');
@@ -224,7 +235,11 @@ const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selec
         minWidth: 240,
         borderColor: borderColor,
         borderWidth: 2,
-        boxShadow: selected || stepStatus?.status === 'running' || pathActive ? `0 0 0 2px ${color}40` : 'none',
+        boxShadow: paused
+          ? '0 0 0 3px rgba(245, 158, 11, 0.45)'
+          : selected || stepStatus?.status === 'running' || pathActive
+            ? `0 0 0 2px ${color}40`
+            : 'none',
       }}
       styles={{ body: { padding: '10px 12px' } }}
     >
@@ -240,9 +255,13 @@ const ContainerNodeComponent: React.FC<NodeProps<NodeData>> = ({ id, data, selec
         <span style={{ fontSize: 18 }}>{nodeType?.icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>{data.label}</div>
-          <Tag style={{ marginTop: 4, background: `${color}20`, borderColor: color, color, fontSize: 11 }}>
-            {nodeType?.label}
-          </Tag>
+          <Space wrap size={4} style={{ marginTop: 4 }}>
+            <Tag style={{ background: `${color}20`, borderColor: color, color, fontSize: 11 }}>
+              {nodeType?.label}
+            </Tag>
+            {hasBreakpoint && <Tag color="gold" data-testid={`breakpoint-badge-${id}`}>断点</Tag>}
+            {paused && <Tag color="orange">已暂停</Tag>}
+          </Space>
           {nestedStatus === 'failed' && (
             <Tag data-testid={`container-status-${id}`} color="error" style={{ marginTop: 4 }}>
               子流程失败
@@ -350,4 +369,8 @@ export const nodeTypes = {
   closeBrowser: CustomNode,
   while: ContainerNode,
   break: CustomNode,
+  callWorkflow: CustomNode,
+  convertJson: CustomNode,
+  extractKey: CustomNode,
+  randomGet: CustomNode,
 };

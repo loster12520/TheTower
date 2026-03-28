@@ -1,5 +1,15 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import type { ApiResponse, ApiError, HealthResponse, WorkflowTemplate, TemplateSummary, Run, RunDebugOptions, RunDebugSession } from '@/models';
+import type {
+  ApiResponse,
+  ApiError,
+  HealthResponse,
+  WorkflowTemplate,
+  TemplateSummary,
+  Run,
+  RunDebugOptions,
+  RunDebugSession,
+  RunDebugContextSnapshot,
+} from '@/models';
 import { appLogger, runtimeConfig } from '@/config/runtime';
 
 /**
@@ -201,6 +211,18 @@ export const runApi = {
 
   openDebugBrowser(id: string): Promise<ApiResponse<RunDebugSession>> {
     return request.post(`/runs/${id}/debug/open-browser`);
+  },
+
+  getDebugContext(id: string): Promise<ApiResponse<RunDebugContextSnapshot>> {
+    return request.get(`/runs/${id}/debug/context`);
+  },
+
+  continueDebug(id: string): Promise<ApiResponse<RunDebugSession>> {
+    return request.post(`/runs/${id}/debug/continue`);
+  },
+
+  stepDebug(id: string): Promise<ApiResponse<RunDebugSession>> {
+    return request.post(`/runs/${id}/debug/step`);
   },
 
   closeDebug(id: string): Promise<ApiResponse<RunDebugSession>> {

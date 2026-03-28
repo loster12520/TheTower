@@ -1,6 +1,7 @@
 import React from 'react';
 import { observer } from 'mobx-react-lite';
 import {
+  Alert,
   Card,
   Button,
   List,
@@ -13,8 +14,9 @@ import {
   message,
   Descriptions,
   Modal,
+  Collapse,
 } from 'antd';
-import { CloseOutlined, SyncOutlined, FullscreenOutlined, DesktopOutlined, LinkOutlined, StopOutlined } from '@ant-design/icons';
+import { CloseOutlined, SyncOutlined, FullscreenOutlined, DesktopOutlined, LinkOutlined, StopOutlined, CaretRightOutlined, StepForwardOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import { runStore } from '@/stores/runStore';
 import { editorStore } from '@/stores/editorStore';
 
@@ -28,6 +30,25 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
   const { currentRun, logs, events, stepStatusMap, latestOutputs, latestArtifacts } = runStore;
   const latestFailedStepPath = runStore.latestFailedStepPath;
   const [previewOpen, setPreviewOpen] = React.useState(false);
+  const debugVariables = runStore.latestDebugContext?.variables || {};
+
+  const handleContinueDebug = async () => {
+    const success = await runStore.continueDebug();
+    if (success) {
+      message.success('调试运行已继续');
+    } else if (runStore.error) {
+      message.error(runStore.error);
+    }
+  };
+
+  const handleStepDebug = async () => {
+    const success = await runStore.stepDebug();
+    if (success) {
+      message.success('已发送单步执行');
+    } else if (runStore.error) {
+      message.error(runStore.error);
+    }
+  };
 
   const handleOpenDebugBrowser = async () => {
     const success = await runStore.openDebugBrowser();
@@ -141,7 +162,7 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
             extra={
               <Space>
                 <Tag color={runStore.debugSession.status === 'ERROR' ? 'error' : 'processing'}>
-                  {runStore.debugSession.status}
+                  {runStore.debugStatusText}
                 </Tag>
                 <Button
                   size="small"
@@ -165,6 +186,9 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
                 <Descriptions.Item label="最近帧">
                   {runStore.debugSession.lastFrameTs ? new Date(runStore.debugSession.lastFrameTs).toLocaleTimeString() : '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="启动即暂停">
+                  {runStore.debugSession.pauseOnStart ? '是' : '否'}
+                </Descriptions.Item>
                 <Descriptions.Item label="宿主机调试">
                   <Space wrap>
                     <Tag color={runStore.debugSession.openVisibleBrowser ? 'blue' : 'default'}>可见浏览器</Tag>
@@ -184,10 +208,50 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
                 <Button size="small" icon={<LinkOutlined />} onClick={handleOpenDebugBrowser}>
                   打开浏览器调试
                 </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<CaretRightOutlined />}
+                  onClick={handleContinueDebug}
+                  disabled={!runStore.isDebugPaused}
+                >
+                  继续
+                </Button>
+                <Button
+                  size="small"
+                  icon={<StepForwardOutlined />}
+                  onClick={handleStepDebug}
+                  disabled={!runStore.isDebugPaused}
+                >
+                  单步
+                </Button>
                 <Button size="small" danger icon={<StopOutlined />} onClick={handleCloseDebug}>
                   关闭调试预览
                 </Button>
               </Space>
+
+              {runStore.isDebugPaused ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  icon={<PauseCircleOutlined />}
+                  message={`调试已暂停${runStore.lastDebugReason ? `：${runStore.lastDebugReason}` : ''}`}
+                  action={
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => {
+                        const stepPath = runStore.currentStepPath;
+                        if (stepPath?.length) {
+                          editorStore.focusStepPath(stepPath);
+                        }
+                      }}
+                    >
+                      定位当前节点
+                    </Button>
+                  }
+                />
+              ) : null}
 
               {runStore.debugPreviewUrl ? (
                 <div
@@ -252,6 +316,44 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
           </Modal>
         </>
       )}
+
+      <Card title="变量检查器" size="small" style={{ marginBottom: 16 }}>
+        {runStore.latestDebugContext ? (
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Descriptions column={1} size="small" styles={{ label: { width: 110 } }}>
+              <Descriptions.Item label="当前步骤">
+                {runStore.latestDebugContext.stepId || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="当前路径">
+                {runStore.latestDebugContext.stepPath.join(' / ') || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="页面别名">
+                {runStore.latestDebugContext.pageAlias || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="上下文">
+                {runStore.latestDebugContext.contextId || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="更新时间">
+                {runStore.latestDebugContext.updatedAt ? new Date(runStore.latestDebugContext.updatedAt).toLocaleString() : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+            {Object.keys(debugVariables).length > 0 ? (
+              <Collapse
+                size="small"
+                items={Object.entries(debugVariables).map(([key, value]) => ({
+                  key,
+                  label: key,
+                  children: <Text copyable={{ text: value }} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{value}</Text>,
+                }))}
+              />
+            ) : (
+              <Empty description="当前暂停点暂无变量快照" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </Space>
+        ) : (
+          <Empty description="尚未收到调试上下文" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
+      </Card>
 
       <Card title="输出摘要" size="small" style={{ marginBottom: 16 }}>
         {Object.keys(latestOutputs).length > 0 ? (

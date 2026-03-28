@@ -25,7 +25,11 @@ const createRealTemplate = async (
     id: payload.data.id as string,
     name: templateName,
     cleanup: async () => {
-      await request.delete(`${backendBase}/templates/${payload.data.id}`);
+      try {
+        await request.delete(`${backendBase}/templates/${payload.data.id}`);
+      } catch {
+        // Ignore cleanup errors when the Playwright request context is already closing.
+      }
     },
   };
 };
@@ -40,6 +44,12 @@ const dragNodeToCanvas = async (page: import('@playwright/test').Page, label: st
   const pane = page.locator('.react-flow__pane').first();
   await source.dragTo(pane, { targetPosition });
 };
+
+const getFormInputByLabel = (page: import('@playwright/test').Page, label: string) =>
+  page.locator('.ant-form-item').filter({ hasText: label }).locator('input').first();
+
+const getFormTextareaByLabel = (page: import('@playwright/test').Page, label: string) =>
+  page.locator('.ant-form-item').filter({ hasText: label }).locator('textarea').first();
 
 const clickPrimaryRunButton = async (page: import('@playwright/test').Page) => {
   await page.locator('.editor-toolbar').getByRole('button', { name: /运行/ }).first().click();
@@ -314,6 +324,189 @@ const realDebugPreviewSteps = [
   },
 ];
 
+const realBreakpointSteps = [
+  {
+    id: 'step-bp-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开断点测试页',
+      config: {
+        url: 'data:text/html,<html><body><h1 id="title">Breakpoint Ready</h1></body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-bp-extract-001',
+    type: 'extract',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '断点提取标题',
+      config: {
+        selector: '#title',
+        saveAs: 'pageTitle',
+        extractType: 'text',
+        breakpoint: true,
+      },
+    },
+  },
+  {
+    id: 'step-bp-wait-001',
+    type: 'waitFor',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '断点后等待',
+      config: {
+        waitMs: 30,
+      },
+    },
+  },
+];
+
+const realCallWorkflowChildSteps = [
+  {
+    id: 'step-child-convert-001',
+    type: 'convertJson',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '解析子流程输入',
+      config: {
+        value: '${payload}',
+        direction: 'parse',
+        saveAs: 'parsedPayload',
+      },
+    },
+  },
+  {
+    id: 'step-child-extract-001',
+    type: 'extractKey',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '提取子流程标题',
+      config: {
+        inputVar: 'parsedPayload',
+        keyPath: 'data.items[0].title',
+        saveAs: 'childTitle',
+      },
+    },
+  },
+];
+
+const createRealCallWorkflowParentSteps = (workflowId: string) => ([
+  {
+    id: 'step-parent-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开父流程页面',
+      config: {
+        url: 'data:text/html,<html><body>parent ready</body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-parent-js-001',
+    type: 'executeJs',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '生成子流程地址',
+      config: {
+        javascript: '() => JSON.stringify({ data: { items: [{ title: "Nested Works" }] } })',
+        saveAs: 'childSource',
+      },
+    },
+  },
+  {
+    id: 'step-parent-call-001',
+    type: 'callWorkflow',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '调用子流程取标题',
+      config: {
+        workflowId,
+        inputMapping: { payload: 'childSource' },
+        outputVar: 'childResult',
+      },
+    },
+  },
+]);
+
+const realDataStepTemplateSteps = [
+  {
+    id: 'step-data-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开数据步骤页',
+      config: {
+        url: 'data:text/html,<html><body>data steps ready</body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-data-js-001',
+    type: 'executeJs',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '生成对象 JSON',
+      config: {
+        javascript: '() => JSON.stringify({ data: { items: [{ title: "Alpha" }] } })',
+        saveAs: 'rawObject',
+      },
+    },
+  },
+  {
+    id: 'step-data-convert-001',
+    type: 'convertJson',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '转换对象文本',
+      config: {
+        value: '${rawObject}',
+        direction: 'parse',
+        saveAs: 'parsedObject',
+      },
+    },
+  },
+  {
+    id: 'step-data-extract-001',
+    type: 'extractKey',
+    position: { x: 120, y: 380 },
+    data: {
+      label: '提取标题字段',
+      config: {
+        inputVar: 'parsedObject',
+        keyPath: 'data.items[0].title',
+        saveAs: 'firstTitle',
+      },
+    },
+  },
+  {
+    id: 'step-data-js-002',
+    type: 'executeJs',
+    position: { x: 120, y: 480 },
+    data: {
+      label: '生成数组 JSON',
+      config: {
+        javascript: '() => JSON.stringify([{ name: "Solo" }])',
+        saveAs: 'rawList',
+      },
+    },
+  },
+  {
+    id: 'step-data-random-001',
+    type: 'randomGet',
+    position: { x: 120, y: 580 },
+    data: {
+      label: '随机取一个元素',
+      config: {
+        inputVar: 'rawList',
+        saveAs: 'pickedItem',
+      },
+    },
+  },
+];
+
 test('editor should load real backend control-flow template', async ({ page, request }) => {
   const template = await createRealTemplate(request, realIfSteps, 'real backend integration test');
 
@@ -529,9 +722,125 @@ test('editor should show debug preview fullscreen and debug controls in real bac
     await expect(page.getByRole('dialog').getByText('调试预览全屏')).toHaveCount(0);
 
     await debugCard.getByRole('button', { name: '关闭调试预览' }).click();
-    await expect(page.getByText('调试预览已关闭')).toBeVisible();
+    await expect(page.getByText('调试预览已关闭', { exact: true })).toBeVisible();
     await expect(page.locator('img[alt="调试预览"]')).toHaveCount(0);
   } finally {
     await template.cleanup();
+  }
+});
+
+test('editor should pause on breakpoint and support step then continue in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realBreakpointSteps, 'real breakpoint integration test', '0.0.7');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.getByTestId('breakpoint-badge-step-bp-extract-001')).toBeVisible();
+
+    await page.getByRole('button', { name: '调试运行' }).click();
+
+    const warningDialog = page.getByRole('dialog', { name: '警告' });
+    await Promise.race([
+      warningDialog.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+      page.getByText('运行监控').waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+    ]);
+    if (await warningDialog.isVisible().catch(() => false)) {
+      await warningDialog.getByRole('button', { name: /OK|确\s*定/ }).click();
+    }
+
+    await expect(page.getByText('调试已暂停')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('step-bp-extract-001').first()).toBeVisible();
+
+    await page.getByRole('button', { name: '单步' }).click();
+    await expect(page.getByText('已发送单步执行')).toBeVisible();
+    await expect(page.getByText('调试已暂停')).toBeVisible({ timeout: 20_000 });
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('pageTitle', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('Breakpoint Ready', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByText('调试运行已继续')).toBeVisible();
+    await expect(page.getByText('RUN_SUCCEEDED').first()).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should author and run 0.0.7 data steps in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realDataStepTemplateSteps, 'real 0.0.7 data steps authoring test', '0.0.7');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(6);
+
+    await page.getByText('转换对象文本').first().click();
+    await getFormInputByLabel(page, '输出变量').fill('parsedPayload');
+
+    await page.getByText('提取标题字段').first().click();
+    await getFormInputByLabel(page, '输入变量').fill('parsedPayload');
+
+    await page.getByText('随机取一个元素').first().click();
+    await getFormInputByLabel(page, '输出变量').fill('chosenItem');
+
+    await page.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByText('保存成功')).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('.react-flow__node')).toHaveCount(6);
+
+    await clickPrimaryRunButton(page);
+    const warningDialog = page.getByRole('dialog', { name: '警告' });
+    await Promise.race([
+      warningDialog.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+      page.getByText('运行监控').waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+    ]);
+    if (await warningDialog.isVisible().catch(() => false)) {
+      await warningDialog.getByRole('button', { name: /OK|确\s*定/ }).click();
+    }
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('firstTitle', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('Alpha', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('chosenItem', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('{"name":"Solo"}', { exact: true })).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should author and run callWorkflow with input mapping in real backend mode', async ({ page, request }) => {
+  const childTemplate = await createRealTemplate(request, realCallWorkflowChildSteps, 'real callWorkflow child test', '0.0.7');
+  const parentTemplate = await createRealTemplate(request, createRealCallWorkflowParentSteps(childTemplate.id), 'real callWorkflow parent authoring test', '0.0.7');
+
+  try {
+    await page.goto(`/editor?id=${parentTemplate.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+
+    await page.getByText('调用子流程取标题').first().click();
+    await getFormTextareaByLabel(page, '参数映射 JSON').fill('{"payload":"childSource"}');
+    await getFormInputByLabel(page, '结果变量').fill('childPayload');
+
+    await page.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByText('保存成功')).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+
+    await clickPrimaryRunButton(page);
+    const warningDialog = page.getByRole('dialog', { name: '警告' });
+    await Promise.race([
+      warningDialog.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+      page.getByText('运行监控').waitFor({ state: 'visible', timeout: 3_000 }).catch(() => null),
+    ]);
+    if (await warningDialog.isVisible().catch(() => false)) {
+      await warningDialog.getByRole('button', { name: /OK|确\s*定/ }).click();
+    }
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    const childPayloadRow = outputCard.locator('tr').filter({ hasText: 'childPayload' });
+    await expect(outputCard.getByText('childPayload', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(childPayloadRow.getByText(/"childTitle":"Nested Works"/)).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await parentTemplate.cleanup();
+    await childTemplate.cleanup();
   }
 });

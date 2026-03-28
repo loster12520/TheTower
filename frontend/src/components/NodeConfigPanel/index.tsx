@@ -1,10 +1,11 @@
 import React, { useEffect } from 'react';
 import { observer } from 'mobx-react-lite';
-import { Alert, Button, Card, Form, Input, InputNumber, Radio, Select, Space, Tag, Typography, Tooltip } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Radio, Select, Space, Switch, Tag, Typography, Tooltip } from 'antd';
 import { QuestionCircleOutlined } from '@ant-design/icons';
 import { editorStore, NODE_TYPES } from '@/stores/editorStore';
 import type { NodeType } from '@/stores/editorStore';
 import { NODE_DEFINITION_MAP } from '@/models/stepRegistry';
+import { templateApi } from '@/services/api';
 
 const { Text } = Typography;
 
@@ -383,6 +384,55 @@ const StartBrowserConfig: React.FC<{ config: Record<string, unknown> }> = ({ con
   );
 };
 
+const CallWorkflowConfig: React.FC<{ config: Record<string, unknown> }> = () => {
+  const [templates, setTemplates] = React.useState<Array<{ label: string; value: string }>>([]);
+
+  useEffect(() => {
+    let disposed = false;
+    templateApi.list().then((response) => {
+      if (disposed) {
+        return;
+      }
+
+      setTemplates(response.data.items.map((item) => ({
+        label: `${item.name} (${item.id.slice(-6)})`,
+        value: item.id,
+      })));
+    }).catch(() => {
+      if (!disposed) {
+        setTemplates([]);
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <Alert type="info" showIcon message="调用另一个模板执行，并把子流程输出增量写回当前流程。" style={{ marginBottom: 16 }} />
+      <Form.Item label="目标模板" name="workflowId" rules={[{ required: true, message: '请选择目标模板' }]}>
+        <Select
+          showSearch
+          placeholder="选择要调用的模板"
+          options={templates}
+          optionFilterProp="label"
+        />
+      </Form.Item>
+      <Form.Item label="模板 ID（手动）" name="_workflowIdManual" extra="无法从列表中找到时，可直接填写模板 ID。">
+        <Input placeholder="template_xxx" />
+      </Form.Item>
+      <Form.Item label="参数映射 JSON" name="_inputMappingText" extra="例如：{&quot;token&quot;:&quot;sessionToken&quot;,&quot;account&quot;:&quot;activeAccount&quot;}">
+        <Input.TextArea rows={4} placeholder='{"token":"sessionToken"}' />
+      </Form.Item>
+      <Form.Item label="结果变量" name="outputVar" extra="子流程输出增量将写入该变量。">
+        <Input placeholder="subflowResult" />
+      </Form.Item>
+    </>
+  );
+};
+
 const SchemaConfig: React.FC<{ type: NodeType }> = ({ type }) => {
   const definition = NODE_DEFINITION_MAP[type];
   if (!definition?.fields || definition.fields.length === 0) {
@@ -440,6 +490,7 @@ const configComponents: Partial<Record<NodeType, React.FC<{ config: Record<strin
   forEachData: ForEachDataConfig,
   startBrowser: StartBrowserConfig,
   break: BreakConfig,
+  callWorkflow: CallWorkflowConfig,
 };
 
 // 主配置面板
@@ -447,17 +498,45 @@ const NodeConfigPanel: React.FC = observer(() => {
   const [form] = Form.useForm();
   const node = editorStore.selectedNode;
 
+  const extractVariableRef = React.useCallback((value: unknown): string => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim());
+    return match?.[1] ?? '';
+  }, []);
+
   // 节点变化时更新表单
   useEffect(() => {
     if (node) {
       const values: Record<string, unknown> = {
         label: node.data.label,
+        breakpoint: node.data.config?.breakpoint === true,
         ...node.data.config,
       };
+      if (node.type === 'callWorkflow') {
+        values._inputMappingText = node.data.config?.inputMapping
+          ? JSON.stringify(node.data.config.inputMapping, null, 2)
+          : '';
+        values._workflowIdManual = node.data.config?.workflowId || '';
+      }
+      if (node.type === 'convertJson') {
+        values.sourceVar = node.data.config?.sourceVar
+          || extractVariableRef(node.data.config?.value)
+          || '';
+        values.targetFormat = node.data.config?.targetFormat
+          || (node.data.config?.direction === 'stringify' ? 'string' : 'object');
+        values.outputVar = node.data.config?.outputVar || node.data.config?.saveAs || '';
+      }
+      if (node.type === 'extractKey' || node.type === 'randomGet') {
+        values.sourceVar = node.data.config?.sourceVar || node.data.config?.inputVar || '';
+        values.outputVar = node.data.config?.outputVar || node.data.config?.saveAs || '';
+      }
       form.resetFields();
       form.setFieldsValue(values);
     }
-  }, [node?.id, form]);
+  }, [extractVariableRef, node?.id, form]);
 
   // 表单值变化时更新节点
   const handleValuesChange = (changedValues: Record<string, unknown>) => {
@@ -489,6 +568,73 @@ const NodeConfigPanel: React.FC = observer(() => {
         delete newData.config.waitMs;
       } else {
         delete newData.config.selector;
+      }
+    }
+
+    if (node.type === 'callWorkflow') {
+      const allValues = form.getFieldsValue(true) as Record<string, unknown>;
+      const workflowIdManual = typeof allValues._workflowIdManual === 'string' ? allValues._workflowIdManual.trim() : '';
+      if (workflowIdManual) {
+        newData.config.workflowId = workflowIdManual;
+      }
+
+      const inputMappingText = typeof allValues._inputMappingText === 'string' ? allValues._inputMappingText.trim() : '';
+      if (!inputMappingText) {
+        delete newData.config.inputMapping;
+      } else {
+        try {
+          const parsed = JSON.parse(inputMappingText) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            newData.config.inputMapping = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // 保留已有配置，等待用户输入完整 JSON 后再更新。
+        }
+      }
+    }
+
+    if (node.type === 'convertJson') {
+      const sourceVar = typeof allValues.sourceVar === 'string' ? allValues.sourceVar.trim() : '';
+      const outputVar = typeof allValues.outputVar === 'string' ? allValues.outputVar.trim() : '';
+      const targetFormat = allValues.targetFormat === 'string' ? 'string' : 'object';
+
+      delete newData.config.sourceVar;
+      delete newData.config.inputVar;
+      delete newData.config.targetFormat;
+      delete newData.config.outputVar;
+
+      if (sourceVar) {
+        newData.config.value = `\${${sourceVar}}`;
+      } else {
+        delete newData.config.value;
+      }
+
+      newData.config.direction = targetFormat === 'string' ? 'stringify' : 'parse';
+
+      if (outputVar) {
+        newData.config.saveAs = outputVar;
+      } else {
+        delete newData.config.saveAs;
+      }
+    }
+
+    if (node.type === 'extractKey' || node.type === 'randomGet') {
+      const sourceVar = typeof allValues.sourceVar === 'string' ? allValues.sourceVar.trim() : '';
+      const outputVar = typeof allValues.outputVar === 'string' ? allValues.outputVar.trim() : '';
+
+      delete newData.config.sourceVar;
+      delete newData.config.outputVar;
+
+      if (sourceVar) {
+        newData.config.inputVar = sourceVar;
+      } else {
+        delete newData.config.inputVar;
+      }
+
+      if (outputVar) {
+        newData.config.saveAs = outputVar;
+      } else {
+        delete newData.config.saveAs;
       }
     }
 
@@ -543,6 +689,10 @@ const NodeConfigPanel: React.FC = observer(() => {
           rules={[{ required: true, message: '请输入节点名称' }]}
         >
           <Input placeholder="节点名称" />
+        </Form.Item>
+
+        <Form.Item label="断点" name="breakpoint" valuePropName="checked" extra="调试运行命中该节点前会暂停。">
+          <Switch checkedChildren="已开启" unCheckedChildren="关闭" />
         </Form.Item>
 
         {ConfigComponent ? <ConfigComponent config={node.data.config} /> : definition?.formType === 'schema' ? <SchemaConfig type={node.type as NodeType} /> : null}

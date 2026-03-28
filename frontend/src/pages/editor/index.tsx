@@ -40,6 +40,7 @@ import {
   UndoOutlined,
   RedoOutlined,
   BugOutlined,
+  PauseCircleOutlined,
 } from '@ant-design/icons';
 import { history, useSearchParams } from 'umi';
 import { editorStore, NODE_TYPES } from '@/stores/editorStore';
@@ -335,13 +336,17 @@ const EditorPage: React.FC = observer(() => {
     await handleRunWithMode('debug');
   };
 
-  const handleRunWithMode = async (mode: 'normal' | 'debug') => {
+  const handlePauseOnStartDebugRun = async () => {
+    await handleRunWithMode('debug-pause');
+  };
+
+  const handleRunWithMode = async (mode: 'normal' | 'debug' | 'debug-pause') => {
     if (!templateId) return;
 
     if (editorStore.isDirty) {
       const saved = await editorStore.saveTemplate();
       if (!saved) {
-        message.error(`保存失败，无法启动${mode === 'debug' ? '调试运行' : '运行'}`);
+        message.error(`保存失败，无法启动${mode === 'normal' ? '运行' : '调试运行'}`);
         return;
       }
     }
@@ -373,21 +378,30 @@ const EditorPage: React.FC = observer(() => {
     }
   };
 
-  const startRun = async (mode: 'normal' | 'debug' = 'normal') => {
+  const startRun = async (mode: 'normal' | 'debug' | 'debug-pause' = 'normal') => {
     if (!templateId) return;
 
-    const success = await runStore.startRun(templateId, mode === 'debug' ? {
+    const isDebug = mode !== 'normal';
+    const breakpoints = editorStore.debugBreakpoints;
+
+    const success = await runStore.startRun(templateId, isDebug ? {
       debug: {
         enabled: true,
         openVisibleBrowser: true,
         openDevtools: true,
         previewFps: 2,
         previewQuality: 60,
+        pauseOnStart: mode === 'debug-pause',
+        breakpoints,
       },
     } : undefined);
     if (success) {
       setRunPanelVisible(true);
-      message.success(mode === 'debug' ? '调试运行已启动' : '运行已启动');
+      if (mode === 'debug-pause') {
+        message.success('调试运行已启动，并将在首个步骤前暂停');
+      } else {
+        message.success(mode === 'debug' ? '调试运行已启动' : '运行已启动');
+      }
     } else if (runStore.error) {
       message.error(runStore.error);
     }
@@ -596,6 +610,15 @@ const EditorPage: React.FC = observer(() => {
                   disabled={editorStore.nodes.length === 0}
                 >
                   调试运行
+                </Button>
+              </Tooltip>
+              <Tooltip title="从第一个步骤前暂停，适合检查初始变量与上下文。">
+                <Button
+                  icon={<PauseCircleOutlined />}
+                  onClick={handlePauseOnStartDebugRun}
+                  disabled={editorStore.nodes.length === 0}
+                >
+                  启动即暂停
                 </Button>
               </Tooltip>
             </>

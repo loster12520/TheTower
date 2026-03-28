@@ -86,6 +86,33 @@ fun Application.runRoutes(runService: RunService) {
                 )
             }
 
+            get("/{id}/debug/context") {
+                val id = call.parameters["id"] ?: ""
+                val context = runService.getDebugContext(id)
+                call.respond(
+                    HttpStatusCode.OK,
+                    context.success(call.requestId())
+                )
+            }
+
+            post("/{id}/debug/continue") {
+                val id = call.parameters["id"] ?: ""
+                val session = runService.continueDebug(id)
+                call.respond(
+                    HttpStatusCode.OK,
+                    session.success(call.requestId())
+                )
+            }
+
+            post("/{id}/debug/step") {
+                val id = call.parameters["id"] ?: ""
+                val session = runService.stepDebug(id)
+                call.respond(
+                    HttpStatusCode.OK,
+                    session.success(call.requestId())
+                )
+            }
+
             post("/{id}/debug/close") {
                 val id = call.parameters["id"] ?: ""
                 val session = runService.closeDebugChannel(id)

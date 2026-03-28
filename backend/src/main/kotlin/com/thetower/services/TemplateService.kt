@@ -66,6 +66,7 @@ class TemplateService(
         }
         validateSchemaVersion(request.schemaVersion)
         validateStepTree(request.steps)
+        validateWorkflowReferences(currentTemplateId = null, steps = request.steps)
 
         val now = nowIso()
         val template = WorkflowTemplate(
@@ -106,6 +107,7 @@ class TemplateService(
     fun updateTemplateSteps(id: String, request: SaveTemplateRequest): WorkflowTemplate {
         validateSchemaVersion(request.schemaVersion)
         validateStepTree(request.steps)
+        validateWorkflowReferences(currentTemplateId = id, steps = request.steps)
         val current = getTemplateById(id)
         val saved = repository.save(
             current.copy(
@@ -141,8 +143,51 @@ class TemplateService(
     }
 
     private fun validateSchemaVersion(schemaVersion: String) {
-        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4" && schemaVersion != "0.0.5" && schemaVersion != "0.0.6") {
-            throw BadRequestException("schemaVersion 必须为 0.0.1、0.0.4、0.0.5 或 0.0.6", mapOf("field" to "schemaVersion"))
+        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4" && schemaVersion != "0.0.5" && schemaVersion != "0.0.6" && schemaVersion != "0.0.7") {
+            throw BadRequestException("schemaVersion 必须为 0.0.1、0.0.4、0.0.5、0.0.6 或 0.0.7", mapOf("field" to "schemaVersion"))
+        }
+    }
+
+    private fun validateWorkflowReferences(currentTemplateId: String?, steps: List<com.thetower.models.StepNode>) {
+        val references = extractReferencedWorkflowIds(steps)
+        if (references.isEmpty()) {
+            return
+        }
+
+        if (currentTemplateId != null && currentTemplateId in references) {
+            throw BadRequestException(
+                "callWorkflow 不允许直接引用自身模板",
+                mapOf("field" to "workflowId", "templateId" to currentTemplateId)
+            )
+        }
+
+        references.forEach { workflowId ->
+            if (repository.findById(workflowId) == null) {
+                throw BadRequestException(
+                    "callWorkflow 引用的模板不存在: $workflowId",
+                    mapOf("field" to "workflowId", "workflowId" to workflowId)
+                )
+            }
+            if (currentTemplateId != null) {
+                detectWorkflowCycle(originTemplateId = currentTemplateId, workflowId = workflowId, visited = linkedSetOf())
+            }
+        }
+    }
+
+    private fun detectWorkflowCycle(originTemplateId: String, workflowId: String, visited: MutableSet<String>) {
+        if (!visited.add(workflowId)) {
+            return
+        }
+        val template = repository.findById(workflowId) ?: return
+        val nestedReferences = extractReferencedWorkflowIds(template.steps)
+        if (originTemplateId in nestedReferences) {
+            throw BadRequestException(
+                "callWorkflow 存在循环引用: $originTemplateId -> $workflowId -> $originTemplateId",
+                mapOf("field" to "workflowId", "templateId" to originTemplateId, "workflowId" to workflowId)
+            )
+        }
+        nestedReferences.forEach { nestedId ->
+            detectWorkflowCycle(originTemplateId, nestedId, visited)
         }
     }
 }

@@ -465,6 +465,57 @@ function validateSimpleRequired(step: Step, fields: string[]): ValidationError[]
   });
 }
 
+function validateVariableReference(step: Step, field: string, label: string = field): ValidationError[] {
+  const config = step.data.config as Record<string, unknown>;
+  const value = typeof config[field] === 'string' ? config[field].trim() : '';
+
+  if (!value) {
+    return [{ stepId: step.id, stepLabel: step.data.label, field, message: `${label} 不能为空` }];
+  }
+
+  if (!isValidVariableName(value)) {
+    return [{ stepId: step.id, stepLabel: step.data.label, field, message: `${label} 格式不正确` }];
+  }
+
+  return [];
+}
+
+function resolveVariableReference(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim());
+  return match?.[1] ?? null;
+}
+
+function getCanonicalDataStepConfig(config: Record<string, unknown>) {
+  const sourceVar = typeof config.sourceVar === 'string' && config.sourceVar.trim().length > 0
+    ? config.sourceVar.trim()
+    : typeof config.inputVar === 'string' && config.inputVar.trim().length > 0
+      ? config.inputVar.trim()
+      : resolveVariableReference(config.value);
+
+  const outputVar = typeof config.outputVar === 'string' && config.outputVar.trim().length > 0
+    ? config.outputVar.trim()
+    : typeof config.saveAs === 'string' && config.saveAs.trim().length > 0
+      ? config.saveAs.trim()
+      : null;
+
+  const targetFormat = typeof config.targetFormat === 'string' && config.targetFormat.trim().length > 0
+    ? config.targetFormat.trim()
+    : config.direction === 'stringify'
+      ? 'string'
+      : 'object';
+
+  return {
+    sourceVar,
+    outputVar,
+    targetFormat,
+    rawValue: typeof config.value === 'string' ? config.value.trim() : '',
+  };
+}
+
 function validateSchemaStep(step: Step): ValidationError[] {
   const config = step.data.config as Record<string, unknown>;
 
@@ -501,6 +552,61 @@ function validateSchemaStep(step: Step): ValidationError[] {
       return validateSimpleRequired(step, ['secret', 'saveAs']);
     case 'getCookies':
       return validateSimpleRequired(step, ['saveAs']);
+    case 'convertJson': {
+      const canonical = getCanonicalDataStepConfig(config);
+      const errors = [
+        ...(canonical.sourceVar
+          ? isValidVariableName(canonical.sourceVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '输入变量格式不正确' }]
+          : canonical.rawValue
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '输入变量不能为空' }]),
+        ...(canonical.outputVar
+          ? isValidVariableName(canonical.outputVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量格式不正确' }]
+          : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量不能为空' }]),
+      ];
+      if (!['object', 'string'].includes(String(canonical.targetFormat || 'object'))) {
+        errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'targetFormat', message: '转换目标仅支持 object 或 string' });
+      }
+      return errors;
+    }
+    case 'extractKey': {
+      const canonical = getCanonicalDataStepConfig(config);
+      const errors = [
+        ...(canonical.sourceVar
+          ? isValidVariableName(canonical.sourceVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '输入变量格式不正确' }]
+          : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '输入变量不能为空' }]),
+        ...(canonical.outputVar
+          ? isValidVariableName(canonical.outputVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量格式不正确' }]
+          : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量不能为空' }]),
+      ];
+      if (!config.keyPath || String(config.keyPath).trim().length === 0) {
+        errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'keyPath', message: '键路径不能为空' });
+      }
+      return errors;
+    }
+    case 'randomGet': {
+      const canonical = getCanonicalDataStepConfig(config);
+      return [
+        ...(canonical.sourceVar
+          ? isValidVariableName(canonical.sourceVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '数组变量格式不正确' }]
+          : [{ stepId: step.id, stepLabel: step.data.label, field: 'sourceVar', message: '数组变量不能为空' }]),
+        ...(canonical.outputVar
+          ? isValidVariableName(canonical.outputVar)
+            ? []
+            : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量格式不正确' }]
+          : [{ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量不能为空' }]),
+      ];
+    }
     case 'screenshotPage': {
       const format = typeof config.format === 'string' ? config.format : 'png';
       return format === 'png' || format === 'jpeg'
@@ -518,6 +624,37 @@ function validateSchemaStep(step: Step): ValidationError[] {
     default:
       return [];
   }
+}
+
+function validateCallWorkflow(step: Step): ValidationError[] {
+  const config = step.data.config as { workflowId?: string; inputMapping?: unknown; outputVar?: string; saveAs?: string };
+  const errors: ValidationError[] = [];
+
+  if (!config.workflowId || config.workflowId.trim().length === 0) {
+    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'workflowId', message: '目标模板不能为空' });
+  }
+
+  const outputVar = config.outputVar || config.saveAs;
+  if (outputVar && !isValidVariableName(outputVar)) {
+    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'outputVar', message: '输出变量名格式不正确' });
+  }
+
+  if (config.inputMapping !== undefined) {
+    if (!config.inputMapping || typeof config.inputMapping !== 'object' || Array.isArray(config.inputMapping)) {
+      errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'inputMapping', message: '参数映射必须是对象' });
+    } else {
+      Object.entries(config.inputMapping as Record<string, unknown>).forEach(([key, value]) => {
+        if (!isValidVariableName(key)) {
+          errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'inputMapping', message: `映射键 ${key} 格式不正确` });
+        }
+        if (typeof value !== 'string' || !isValidVariableName(value)) {
+          errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'inputMapping', message: `映射值 ${key} 必须是有效变量名` });
+        }
+      });
+    }
+  }
+
+  return errors;
 }
 
 function validateForEachElement(step: Step): ValidationError[] {
@@ -630,6 +767,12 @@ function validateStep(step: Step, context: ValidationContext): ValidationError[]
       return validateStartBrowser(step, context);
     case 'break':
       return validateBreak(step, context);
+    case 'callWorkflow':
+      return validateCallWorkflow(step);
+    case 'convertJson':
+    case 'extractKey':
+    case 'randomGet':
+      return validateSchemaStep(step);
     default:
       return [{
         stepId: step.id,

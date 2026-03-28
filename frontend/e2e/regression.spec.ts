@@ -19,6 +19,12 @@ const dragNodeToCanvas = async (page: Page, label: string, targetPosition = { x:
   await source.dragTo(pane, { targetPosition });
 };
 
+const getFormInputByLabel = (page: Page, label: string) =>
+  page.locator('.ant-form-item').filter({ hasText: label }).locator('input').first();
+
+const getFormTextareaByLabel = (page: Page, label: string) =>
+  page.locator('.ant-form-item').filter({ hasText: label }).locator('textarea').first();
+
 const openCardMenu = async (page: Page, title: string) => {
   const card = page.locator('.template-card', { hasText: title }).first();
   await expect(card).toBeVisible();
@@ -185,4 +191,221 @@ test('editor should auto connect nearby nodes after dragging', async ({ page }) 
   await page.mouse.up();
 
   await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+});
+
+test('editor should persist breakpoint and callWorkflow config after save and reload', async ({ page }) => {
+  const templateName = `回归调用子流程-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证 0.0.7 子流程配置与断点持久化');
+
+  await dragNodeToCanvas(page, '调用子流程', { x: 260, y: 160 });
+  const node = page.locator('.react-flow__node').first();
+  await expect(node).toBeVisible();
+
+  await node.click();
+  await getFormInputByLabel(page, '模板 ID（手动）').fill('tpl-001');
+  await getFormTextareaByLabel(page, '参数映射 JSON').fill('{"token":"sessionToken","account":"activeAccount"}');
+  await getFormInputByLabel(page, '结果变量').fill('subflowResult');
+  await page.locator('.ant-form-item').filter({ hasText: '断点' }).getByRole('switch').click();
+
+  await expect(page.getByTestId(/breakpoint-badge-/)).toBeVisible();
+
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible();
+
+  await page.reload();
+  const reloadedNode = page.locator('.react-flow__node').first();
+  await expect(reloadedNode).toBeVisible();
+  await expect(page.getByTestId(/breakpoint-badge-/)).toBeVisible();
+
+  await reloadedNode.click();
+  await expect(getFormInputByLabel(page, '模板 ID（手动）')).toHaveValue('tpl-001');
+  await expect(getFormTextareaByLabel(page, '参数映射 JSON')).toHaveValue('{\n  "token": "sessionToken",\n  "account": "activeAccount"\n}');
+  await expect(getFormInputByLabel(page, '结果变量')).toHaveValue('subflowResult');
+  await expect(page.locator('.ant-form-item').filter({ hasText: '断点' }).getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+});
+
+test('editor should persist data-step config after save and reload', async ({ page }) => {
+  const templateName = `回归数据步骤-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证 0.0.7 数据步骤配置');
+
+  await dragNodeToCanvas(page, '转换 JSON', { x: 220, y: 140 });
+  const node = page.locator('.react-flow__node').first();
+  await expect(node).toBeVisible();
+
+  await node.click();
+  await getFormInputByLabel(page, '输入变量').fill('rawPayload');
+  await getFormInputByLabel(page, '输出变量').fill('parsedPayload');
+
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible();
+
+  await page.reload();
+  await page.locator('.react-flow__node').first().click();
+  await expect(getFormInputByLabel(page, '输入变量')).toHaveValue('rawPayload');
+  await expect(getFormInputByLabel(page, '输出变量')).toHaveValue('parsedPayload');
+});
+
+test('editor should render paused debug panel and allow step/continue actions', async ({ page }) => {
+  const templateName = `回归调试暂停-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证 0.0.7 调试暂停与变量检查器');
+
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+  const node = page.locator('.react-flow__node').first();
+  await expect(node).toBeVisible();
+
+  await node.click();
+  await getFormInputByLabel(page, '网址 URL').fill('https://example.com');
+
+  const stepId = await node.getAttribute('data-id');
+  if (!stepId) {
+    throw new Error('无法获取步骤 ID');
+  }
+
+  const debugContext = {
+    stepId,
+    stepPath: [stepId],
+    pageAlias: 'page-1',
+    contextId: 'ctx-debug-001',
+    variables: {
+      sessionToken: 'token-001',
+      accountName: 'demo-user',
+    },
+    updatedAt: '2026-04-01T10:00:00.000Z',
+  };
+
+  await page.route('**/api/v1/runs', async (route) => {
+    const body = route.request().postDataJSON() as { templateId: string; debug?: { pauseOnStart?: boolean } };
+    if (!body.debug?.pauseOnStart) {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        requestId: 'req-debug-start',
+        data: {
+          run: {
+            id: 'run-debug-001',
+            templateId: body.templateId,
+            status: 'RUNNING',
+            currentStepId: stepId,
+            startedAt: '2026-04-01T10:00:00.000Z',
+            finishedAt: null,
+            error: null,
+            outputs: {},
+            artifacts: [],
+          },
+          wsUrl: '',
+          debug: {
+            enabled: true,
+            openVisibleBrowser: true,
+            openDevtools: true,
+            previewFps: 2,
+            previewQuality: 60,
+            pauseOnStart: true,
+            breakpoints: [],
+            status: 'PAUSED',
+            currentStepId: stepId,
+            currentStepPath: [stepId],
+            pageAlias: 'page-1',
+            contextId: 'ctx-debug-001',
+            lastFrameTs: null,
+            lastError: null,
+            latestContext: debugContext,
+          },
+        },
+        error: null,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/runs/run-debug-001/debug/step', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        requestId: 'req-debug-step',
+        data: {
+          enabled: true,
+          openVisibleBrowser: true,
+          openDevtools: true,
+          previewFps: 2,
+          previewQuality: 60,
+          pauseOnStart: true,
+          breakpoints: [],
+          status: 'PAUSED',
+          currentStepId: stepId,
+          currentStepPath: [stepId],
+          pageAlias: 'page-1',
+          contextId: 'ctx-debug-001',
+          lastFrameTs: null,
+          lastError: null,
+          latestContext: {
+            ...debugContext,
+            variables: {
+              ...debugContext.variables,
+              stepCounter: '1',
+            },
+            updatedAt: '2026-04-01T10:00:01.000Z',
+          },
+        },
+        error: null,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/runs/run-debug-001/debug/continue', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        requestId: 'req-debug-continue',
+        data: {
+          enabled: true,
+          openVisibleBrowser: true,
+          openDevtools: true,
+          previewFps: 2,
+          previewQuality: 60,
+          pauseOnStart: true,
+          breakpoints: [],
+          status: 'STREAMING',
+          currentStepId: stepId,
+          currentStepPath: [stepId],
+          pageAlias: 'page-1',
+          contextId: 'ctx-debug-001',
+          lastFrameTs: null,
+          lastError: null,
+          latestContext: {
+            ...debugContext,
+            variables: {
+              ...debugContext.variables,
+              stepCounter: '2',
+            },
+            updatedAt: '2026-04-01T10:00:02.000Z',
+          },
+        },
+        error: null,
+      }),
+    });
+  });
+
+  await page.getByRole('button', { name: '启动即暂停' }).click();
+
+  await expect(page.getByText('调试运行已启动，并将在首个步骤前暂停')).toBeVisible();
+  await expect(page.getByText('运行监控')).toBeVisible();
+  await expect(page.getByText('调试已暂停')).toBeVisible();
+  await expect(page.getByText('变量检查器')).toBeVisible();
+  await expect(page.getByText('sessionToken')).toBeVisible();
+  await expect(page.getByText('accountName')).toBeVisible();
+
+  await page.getByRole('button', { name: '单步' }).click();
+  await expect(page.getByText('已发送单步执行')).toBeVisible();
+  await expect(page.getByText('stepCounter')).toBeVisible();
+
+  await page.getByRole('button', { name: '继续' }).click();
+  await expect(page.getByText('调试运行已继续')).toBeVisible();
+  await expect(page.locator('.ant-tag').filter({ hasText: '运行中' }).first()).toBeVisible();
+  await expect(page.getByText('调试已暂停')).toHaveCount(0);
 });

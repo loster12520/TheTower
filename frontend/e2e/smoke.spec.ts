@@ -4,7 +4,7 @@ test('home page should render template title and create button', async ({ page }
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '工作流模板' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新建模板' })).toBeVisible();
-  await expect(page.getByText('默认版本 0.0.6')).toBeVisible();
+  await expect(page.getByText('默认版本 0.0.7')).toBeVisible();
 });
 
 test('create template should navigate to editor page', async ({ page }) => {
@@ -17,7 +17,7 @@ test('create template should navigate to editor page', async ({ page }) => {
   const templateName = `E2E模板-${Date.now()}`;
   await dialog.locator('input[placeholder="例如：抓取网页标题"]').fill(templateName);
   await dialog.locator('textarea[placeholder="简要描述这个工作流的功能..."]').fill('Playwright 自动化创建');
-  await expect(dialog.getByText('schemaVersion 0.0.6')).toBeVisible();
+  await expect(dialog.getByText('schemaVersion 0.0.7')).toBeVisible();
   await dialog.getByRole('button', { name: /创\s*建/ }).click();
 
   await expect(page).toHaveURL(/\/editor\?id=/);

@@ -114,6 +114,112 @@ class TemplateServiceTest {
         assertEquals("0.0.6", summary.schemaVersion)
     }
 
+    @Test
+    fun `createTemplate accepts 0_0_7 schemaVersion`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "v007",
+                schemaVersion = "0.0.7"
+            )
+        )
+
+        assertEquals("0.0.7", created.schemaVersion)
+    }
+
+    @Test
+    fun `updateTemplateSteps rejects callWorkflow self reference`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "self",
+                schemaVersion = "0.0.7"
+            )
+        )
+
+        assertFailsWith<BadRequestException> {
+            service.updateTemplateSteps(
+                created.id,
+                SaveTemplateRequest(
+                    schemaVersion = "0.0.7",
+                    steps = listOf(
+                        step(
+                            "call-1",
+                            "callWorkflow",
+                            buildJsonObject {
+                                put("workflowId", created.id)
+                            }
+                        )
+                    ),
+                    otherStep = OtherStep()
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `updateTemplateSteps rejects indirect workflow cycle`() {
+        val child = service.createTemplate(
+            CreateTemplateRequest(
+                name = "child",
+                schemaVersion = "0.0.7"
+            )
+        )
+        val parent = service.createTemplate(
+            CreateTemplateRequest(
+                name = "parent",
+                schemaVersion = "0.0.7",
+                steps = listOf(
+                    step(
+                        "call-child",
+                        "callWorkflow",
+                        buildJsonObject {
+                            put("workflowId", child.id)
+                        }
+                    )
+                )
+            )
+        )
+
+        assertFailsWith<BadRequestException> {
+            service.updateTemplateSteps(
+                child.id,
+                SaveTemplateRequest(
+                    schemaVersion = "0.0.7",
+                    steps = listOf(
+                        step(
+                            "call-parent",
+                            "callWorkflow",
+                            buildJsonObject {
+                                put("workflowId", parent.id)
+                            }
+                        )
+                    ),
+                    otherStep = OtherStep()
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `createTemplate rejects missing workflow reference`() {
+        assertFailsWith<BadRequestException> {
+            service.createTemplate(
+                CreateTemplateRequest(
+                    name = "bad-ref",
+                    schemaVersion = "0.0.7",
+                    steps = listOf(
+                        step(
+                            "call-1",
+                            "callWorkflow",
+                            buildJsonObject {
+                                put("workflowId", "missing-workflow")
+                            }
+                        )
+                    )
+                )
+            )
+        }
+    }
+
     private fun step(id: String, type: String, config: kotlinx.serialization.json.JsonObject = buildJsonObject {}): StepNode {
         return StepNode(
             id = id,

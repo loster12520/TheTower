@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -15,7 +16,9 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
 
+import kotlinx.serialization.json.buildJsonObject
 private val stepTreeJson = Json { ignoreUnknownKeys = true }
 private val variablePattern = Regex("\\$\\{([a-zA-Z_][a-zA-Z0-9_]*)}")
 
@@ -123,8 +126,60 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
                     throw InvalidStepConfigException("break 仅允许出现在循环体内", mapOf("stepId" to step.id))
                 }
             }
+
+            "callWorkflow" -> {
+                validateNonBlankText(step, "workflowId")
+                val inputMapping = step.data.config["inputMapping"]
+                if (inputMapping != null && inputMapping !is JsonObject) {
+                    throw InvalidStepConfigException("callWorkflow.inputMapping 必须为对象", mapOf("stepId" to step.id, "field" to "inputMapping"))
+                }
+            }
+
+            "convertJson" -> {
+                validateNonBlankText(step, "value")
+                validateNonBlankText(step, "saveAs")
+                validateEnum(step, "direction", setOf("parse", "stringify"))
+            }
+
+            "extractKey" -> {
+                validateNonBlankText(step, "inputVar")
+                validateNonBlankText(step, "keyPath")
+                validateNonBlankText(step, "saveAs")
+            }
+
+            "randomGet" -> {
+                validateNonBlankText(step, "inputVar")
+                validateNonBlankText(step, "saveAs")
+            }
         }
     }
+}
+
+internal fun extractReferencedWorkflowIds(steps: List<StepNode>): Set<String> {
+    val workflowIds = linkedSetOf<String>()
+
+    fun collect(nodes: List<StepNode>) {
+        nodes.forEach { step ->
+            if (step.type == "callWorkflow") {
+                step.data.config["workflowId"]?.jsonPrimitive?.contentOrNull?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let(workflowIds::add)
+            }
+            when (step.type) {
+                "if" -> {
+                    collect(getBranchSteps(step.data.config, "then"))
+                    collect(getBranchSteps(step.data.config, "else"))
+                }
+
+                "forEachElement", "forTimes", "forEachData", "while", "startBrowser" -> {
+                    collect(getBranchSteps(step.data.config, "body"))
+                }
+            }
+        }
+    }
+
+    collect(steps)
+    return workflowIds
 }
 
 private fun validateNonBlankText(step: StepNode, field: String) {
@@ -279,6 +334,138 @@ internal fun serializeStringList(items: List<String>): String {
     return buildJsonArray {
         items.forEach { add(JsonPrimitive(it)) }
     }.toString()
+}
+
+internal fun applyWorkflowInputMapping(
+    config: JsonObject,
+    parentOutputs: Map<String, String>,
+    baseOutputs: MutableMap<String, String>
+) {
+    val mapping = config["inputMapping"] as? JsonObject ?: return
+    mapping.forEach { (targetKey, value) ->
+        val raw = value.jsonPrimitive.contentOrNull ?: value.toString()
+        baseOutputs[targetKey] = when {
+            raw in parentOutputs -> parentOutputs[raw].orEmpty()
+            else -> resolveTextTemplate(raw, parentOutputs) ?: ""
+        }
+    }
+}
+
+internal fun buildWorkflowOutputDelta(parentOutputs: Map<String, String>, childOutputs: Map<String, String>): Map<String, String> {
+    return childOutputs.filter { (key, value) -> parentOutputs[key] != value }
+}
+
+internal fun serializeWorkflowOutput(delta: Map<String, String>): String {
+    return buildJsonObject {
+        delta.forEach { (key, value) ->
+            put(key, JsonPrimitive(value))
+        }
+    }.toString()
+}
+
+internal fun workflowCallDepth(stepPath: List<String>): Int = stepPath.count { it == "callWorkflow" }
+
+internal fun convertJsonValue(raw: String, direction: String): String {
+    return when (direction.lowercase()) {
+        "parse" -> stepTreeJson.parseToJsonElement(raw).toString()
+        "stringify" -> stepTreeJson.encodeToJsonElement(raw).toString()
+        else -> throw InvalidStepConfigException("convertJson.direction 不支持: $direction", mapOf("field" to "direction"))
+    }
+}
+
+internal fun extractJsonKey(raw: String, keyPath: String): String {
+    val root = stepTreeJson.parseToJsonElement(raw)
+    val tokens = parseKeyPath(keyPath)
+    val resolved = tokens.fold(root) { current, token ->
+        when (token) {
+            is PathToken.Property -> {
+                val value = current.jsonObject[token.name]
+                    ?: throw InvalidStepConfigException("extractKey 未找到 keyPath: $keyPath", mapOf("field" to "keyPath"))
+                value
+            }
+
+            is PathToken.Index -> {
+                val array = current.jsonArray
+                array.getOrNull(token.index)
+                    ?: throw InvalidStepConfigException("extractKey 索引越界: $keyPath", mapOf("field" to "keyPath"))
+            }
+        }
+    }
+    return serializeJsonLeaf(resolved)
+}
+
+internal fun randomGetFromJsonArray(raw: String, randomIndex: Int? = null): String {
+    val array = stepTreeJson.parseToJsonElement(raw).jsonArray
+    if (array.isEmpty()) {
+        throw InvalidStepConfigException("randomGet 输入数组不能为空", mapOf("field" to "inputVar"))
+    }
+    val index = randomIndex ?: kotlin.random.Random.nextInt(array.size)
+    return serializeJsonLeaf(array[index])
+}
+
+private sealed interface PathToken {
+    data class Property(val name: String) : PathToken
+    data class Index(val index: Int) : PathToken
+}
+
+private fun parseKeyPath(keyPath: String): List<PathToken> {
+    if (keyPath.isBlank()) {
+        throw InvalidStepConfigException("extractKey.keyPath 不能为空", mapOf("field" to "keyPath"))
+    }
+    val tokens = mutableListOf<PathToken>()
+    var buffer = StringBuilder()
+    var index = 0
+    while (index < keyPath.length) {
+        when (val ch = keyPath[index]) {
+            '.' -> {
+                if (buffer.isEmpty()) {
+                    throw InvalidStepConfigException("extractKey.keyPath 非法: $keyPath", mapOf("field" to "keyPath"))
+                }
+                tokens.add(PathToken.Property(buffer.toString()))
+                buffer = StringBuilder()
+                index++
+            }
+
+            '[' -> {
+                if (buffer.isNotEmpty()) {
+                    tokens.add(PathToken.Property(buffer.toString()))
+                    buffer = StringBuilder()
+                }
+                val end = keyPath.indexOf(']', startIndex = index)
+                if (end <= index + 1) {
+                    throw InvalidStepConfigException("extractKey.keyPath 非法: $keyPath", mapOf("field" to "keyPath"))
+                }
+                val rawIndex = keyPath.substring(index + 1, end)
+                val parsedIndex = rawIndex.toIntOrNull()
+                    ?: throw InvalidStepConfigException("extractKey.keyPath 非法: $keyPath", mapOf("field" to "keyPath"))
+                tokens.add(PathToken.Index(parsedIndex))
+                index = end + 1
+                if (index < keyPath.length && keyPath[index] == '.') {
+                    index++
+                }
+            }
+
+            else -> {
+                buffer.append(ch)
+                index++
+            }
+        }
+    }
+    if (buffer.isNotEmpty()) {
+        tokens.add(PathToken.Property(buffer.toString()))
+    }
+    if (tokens.isEmpty()) {
+        throw InvalidStepConfigException("extractKey.keyPath 不能为空", mapOf("field" to "keyPath"))
+    }
+    return tokens
+}
+
+private fun serializeJsonLeaf(element: JsonElement): String {
+    val primitive = element as? JsonPrimitive ?: return element.toString()
+    primitive.booleanOrNull?.let { return it.toString() }
+    primitive.intOrNull?.let { return it.toString() }
+    primitive.doubleOrNull?.let { return it.toString() }
+    return primitive.contentOrNull ?: element.toString()
 }
 
 private fun decodeStepList(element: JsonElement, field: String): List<StepNode> {

@@ -35,6 +35,26 @@ interface EditorSnapshot {
   selectedNodeId: string | null;
 }
 
+const collectBreakpointStepIds = (steps: Step[]): string[] => {
+  const result: string[] = [];
+
+  steps.forEach((step) => {
+    if (step.data?.config?.breakpoint === true) {
+      result.push(step.id);
+    }
+
+    const config = step.data?.config as Record<string, unknown> | undefined;
+    ['then', 'else', 'body'].forEach((branch) => {
+      const branchSteps = config?.[branch];
+      if (Array.isArray(branchSteps)) {
+        result.push(...collectBreakpointStepIds(branchSteps as Step[]));
+      }
+    });
+  });
+
+  return result;
+};
+
 const isBranchType = (value: string): value is BranchType => value === 'then' || value === 'else' || value === 'body';
 
 const cloneConfig = (config: Record<string, unknown>) => JSON.parse(JSON.stringify(config ?? {})) as Record<string, unknown>;
@@ -180,6 +200,16 @@ class EditorStore {
     return this.futureSnapshots.length > 0;
   }
 
+  get currentNodeHasBreakpoint() {
+    return this.selectedNode?.data?.config?.breakpoint === true;
+  }
+
+  get debugBreakpoints(): string[] {
+    this.syncCurrentCanvas(false);
+    const { steps } = graphToSteps(this.rootNodes, this.rootEdges);
+    return collectBreakpointStepIds(steps);
+  }
+
   // ========== 数据加载 ==========
 
   // 加载模板
@@ -238,7 +268,7 @@ class EditorStore {
 
     try {
       await templateApi.saveSteps(this.templateId, {
-        schemaVersion: '0.0.6',
+        schemaVersion: '0.0.7',
         steps: steps as Step[],
         otherStep
       });

@@ -65,7 +65,9 @@ data class RunDebugOptions(
     val openVisibleBrowser: Boolean = false,
     val openDevtools: Boolean = false,
     val previewFps: Int = 2,
-    val previewQuality: Int = 60
+    val previewQuality: Int = 60,
+    val pauseOnStart: Boolean = false,
+    val breakpoints: List<String> = emptyList()
 )
 
 @Serializable
@@ -73,9 +75,20 @@ enum class DebugSessionStatus {
     IDLE,
     STARTING,
     STREAMING,
+    PAUSED,
     CLOSED,
     ERROR
 }
+
+@Serializable
+data class RunDebugContextSnapshot(
+    val stepId: String? = null,
+    val stepPath: List<String> = emptyList(),
+    val pageAlias: String? = null,
+    val contextId: String? = null,
+    val variables: Map<String, String> = emptyMap(),
+    val updatedAt: String? = null
+)
 
 @Serializable
 data class RunDebugSession(
@@ -84,9 +97,14 @@ data class RunDebugSession(
     val openDevtools: Boolean = false,
     val previewFps: Int = 2,
     val previewQuality: Int = 60,
+    val pauseOnStart: Boolean = false,
+    val breakpoints: List<String> = emptyList(),
     val status: DebugSessionStatus = DebugSessionStatus.IDLE,
+    val currentStepId: String? = null,
+    val currentStepPath: List<String> = emptyList(),
     val pageAlias: String? = null,
     val contextId: String? = null,
     val lastFrameTs: String? = null,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val latestContext: RunDebugContextSnapshot? = null
 )

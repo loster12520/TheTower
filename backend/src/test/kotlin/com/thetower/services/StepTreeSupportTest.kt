@@ -9,6 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertContentEquals
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -164,6 +165,137 @@ class StepTreeSupportTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun `validateStepTree accepts 0_0_7 data steps and callWorkflow`() {
+        validateStepTree(
+            listOf(
+                step(
+                    "call-1",
+                    "callWorkflow",
+                    buildJsonObject {
+                        put("workflowId", "wf-child")
+                    }
+                ),
+                step(
+                    "json-1",
+                    "convertJson",
+                    buildJsonObject {
+                        put("value", "{\"a\":1}")
+                        put("direction", "parse")
+                        put("saveAs", "normalized")
+                    }
+                ),
+                step(
+                    "extract-1",
+                    "extractKey",
+                    buildJsonObject {
+                        put("inputVar", "payload")
+                        put("keyPath", "data.items[0].title")
+                        put("saveAs", "title")
+                    }
+                ),
+                step(
+                    "random-1",
+                    "randomGet",
+                    buildJsonObject {
+                        put("inputVar", "items")
+                        put("saveAs", "pick")
+                    }
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `extractReferencedWorkflowIds collects nested callWorkflow nodes`() {
+        val references = extractReferencedWorkflowIds(
+            listOf(
+                step(
+                    "if-1",
+                    "if",
+                    buildJsonObject {
+                        put("condition", buildJsonObject {
+                            put("left", "1")
+                            put("op", "equals")
+                            put("right", "1")
+                        })
+                        putJsonSteps(
+                            "then",
+                            listOf(
+                                step("call-1", "callWorkflow", buildJsonObject { put("workflowId", "wf-a") }),
+                                step(
+                                    "for-1",
+                                    "forEachData",
+                                    buildJsonObject {
+                                        put("dataVar", "items")
+                                        put("itemVar", "item")
+                                        putJsonSteps("body", listOf(step("call-2", "callWorkflow", buildJsonObject { put("workflowId", "wf-b") })))
+                                    }
+                                )
+                            )
+                        )
+                        putJsonSteps("else", emptyList())
+                    }
+                )
+            )
+        )
+
+        assertContentEquals(listOf("wf-a", "wf-b"), references.toList())
+    }
+
+    @Test
+    fun `applyWorkflowInputMapping resolves template values into child outputs`() {
+        val childOutputs = mutableMapOf("existing" to "1")
+        applyWorkflowInputMapping(
+            buildJsonObject {
+                put("inputMapping", buildJsonObject {
+                    put("token", "${'$'}{parentToken}")
+                    put("fixed", "hello")
+                })
+            },
+            parentOutputs = mapOf("parentToken" to "abc"),
+            baseOutputs = childOutputs
+        )
+
+        assertEquals("abc", childOutputs["token"])
+        assertEquals("hello", childOutputs["fixed"])
+        assertEquals("1", childOutputs["existing"])
+    }
+
+    @Test
+    fun `buildWorkflowOutputDelta only keeps changed values`() {
+        val delta = buildWorkflowOutputDelta(
+            parentOutputs = mapOf("same" to "1", "old" to "x"),
+            childOutputs = mapOf("same" to "1", "old" to "y", "new" to "z")
+        )
+
+        assertEquals(mapOf("old" to "y", "new" to "z"), delta)
+        assertEquals("{\"old\":\"y\",\"new\":\"z\"}", serializeWorkflowOutput(delta))
+    }
+
+    @Test
+    fun `workflowCallDepth counts nested call markers`() {
+        assertEquals(0, workflowCallDepth(listOf("step-1")))
+        assertEquals(2, workflowCallDepth(listOf("root", "callWorkflow", "child-1", "callWorkflow", "child-2")))
+    }
+
+    @Test
+    fun `convertJsonValue parse normalizes json`() {
+        assertEquals("{\"a\":1,\"b\":[2,3]}", convertJsonValue("{\n  \"a\": 1, \"b\": [2, 3]\n}", "parse"))
+        assertEquals("\"hello\"", convertJsonValue("hello", "stringify"))
+    }
+
+    @Test
+    fun `extractJsonKey supports object and array path`() {
+        val raw = "{\"data\":{\"items\":[{\"title\":\"A\"},{\"title\":\"B\"}]}}"
+        assertEquals("A", extractJsonKey(raw, "data.items[0].title"))
+    }
+
+    @Test
+    fun `randomGetFromJsonArray returns selected element`() {
+        assertEquals("b", randomGetFromJsonArray("[\"a\",\"b\",\"c\"]", randomIndex = 1))
     }
 
     @Test

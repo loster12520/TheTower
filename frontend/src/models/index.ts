@@ -71,7 +71,11 @@ export type StepType =
   | 'if'
   | 'forTimes'
   | 'while'
-  | 'break';
+  | 'break'
+  | 'callWorkflow'
+  | 'convertJson'
+  | 'extractKey'
+  | 'randomGet';
 
 export interface Step {
   id: string;
@@ -115,9 +119,21 @@ export type NodeConfig = Record<string, unknown> & {
   selector?: string;
   text?: string;
   waitMs?: number;
+  saveAs?: string;
   as?: string;
+  extractType?: string;
   mode?: string;
   attributeName?: string;
+  breakpoint?: boolean;
+  workflowId?: string;
+  inputMapping?: Record<string, string>;
+  outputVar?: string;
+  sourceVar?: string;
+  inputVar?: string;
+  targetFormat?: 'object' | 'string';
+  direction?: 'parse' | 'stringify';
+  value?: string;
+  keyPath?: string;
   condition?: ConditionConfig;
   then?: Step[];
   else?: Step[];
@@ -147,9 +163,20 @@ export interface RunDebugOptions {
   openDevtools?: boolean;
   previewFps?: number;
   previewQuality?: number;
+  pauseOnStart?: boolean;
+  breakpoints?: string[];
 }
 
-export type DebugSessionStatus = 'IDLE' | 'STARTING' | 'STREAMING' | 'CLOSED' | 'ERROR';
+export type DebugSessionStatus = 'IDLE' | 'STARTING' | 'STREAMING' | 'PAUSED' | 'CLOSED' | 'ERROR';
+
+export interface RunDebugContextSnapshot {
+  stepId?: string | null;
+  stepPath: string[];
+  pageAlias?: string | null;
+  contextId?: string | null;
+  variables: Record<string, string>;
+  updatedAt?: string | null;
+}
 
 export interface RunDebugSession {
   enabled: boolean;
@@ -157,11 +184,16 @@ export interface RunDebugSession {
   openDevtools: boolean;
   previewFps: number;
   previewQuality: number;
+  pauseOnStart: boolean;
+  breakpoints: string[];
   status: DebugSessionStatus;
+  currentStepId?: string | null;
+  currentStepPath: string[];
   pageAlias?: string | null;
   contextId?: string | null;
   lastFrameTs?: string | null;
   lastError?: string | null;
+  latestContext?: RunDebugContextSnapshot | null;
 }
 
 export interface DebugPreviewFrame {

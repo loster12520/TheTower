@@ -8,6 +8,7 @@ import com.thetower.models.LastRun
 import com.thetower.models.Run
 import com.thetower.models.RunArtifact
 import com.thetower.models.RunDebugOptions
+import com.thetower.models.RunDebugContextSnapshot
 import com.thetower.models.RunDebugSession
 import com.thetower.models.RunError
 import com.thetower.models.RunEvent
@@ -44,6 +45,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -54,6 +56,10 @@ class RunService(
     private val templateService: TemplateService,
     private val playwrightExecutor: PlaywrightRunExecutor
 ) {
+    private companion object {
+        const val MAX_CALL_WORKFLOW_DEPTH = 5
+    }
+
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runningJobs = ConcurrentHashMap<String, Job>()
@@ -62,6 +68,7 @@ class RunService(
     private val runRequestIds = ConcurrentHashMap<String, String>()
     private val runDebugOptions = ConcurrentHashMap<String, RunDebugOptions>()
     private val runDebugSessions = ConcurrentHashMap<String, RunDebugSession>()
+    private val debugExecutionGate = DebugExecutionGate()
     private val closedDebugRuns = ConcurrentHashMap.newKeySet<String>()
     private val debugPreviewLocks = ConcurrentHashMap<String, Any>()
     private val activeDebugSessions = ConcurrentHashMap<String, PlaywrightRunSession>()
@@ -104,6 +111,7 @@ class RunService(
         if (normalizedDebug != null) {
             runDebugOptions[runId] = normalizedDebug
             runDebugSessions[runId] = normalizedDebug.toSession(status = DebugSessionStatus.IDLE)
+            debugExecutionGate.register(runId, normalizedDebug)
             closedDebugRuns.remove(runId)
         }
 
@@ -129,6 +137,74 @@ class RunService(
         getRunById(runId)
         return runDebugSessions[runId]
             ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+    }
+
+    fun getDebugContext(runId: String): RunDebugContextSnapshot {
+        val run = getRunById(runId)
+        val session = runDebugSessions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+        return session.latestContext ?: RunDebugContextSnapshot(
+            stepId = session.currentStepId ?: run.currentStepId,
+            stepPath = session.currentStepPath,
+            pageAlias = session.pageAlias,
+            contextId = session.contextId,
+            variables = run.outputs,
+            updatedAt = session.lastFrameTs ?: run.startedAt ?: nowIso()
+        )
+    }
+
+    fun continueDebug(runId: String): RunDebugSession {
+        getRunById(runId)
+        val current = runDebugSessions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+        if (!debugExecutionGate.isPaused(runId)) {
+            throw BadRequestException("运行 $runId 当前不处于暂停态", mapOf("code" to ErrorCodes.DEBUG_CONTROL_INVALID))
+        }
+        val resume = debugExecutionGate.continueRun(runId)
+        val updated = current.copy(
+            status = DebugSessionStatus.STREAMING,
+            currentStepId = resume.stepId ?: current.currentStepId,
+            currentStepPath = resume.stepPath.ifEmpty { current.currentStepPath }
+        )
+        runDebugSessions[runId] = updated
+        emit(
+            runId,
+            EventType.DEBUG_RESUMED,
+            buildJsonObject {
+                put("stepId", resume.stepId?.let(::JsonPrimitive) ?: JsonNull)
+                put("stepPath", resume.stepPath.toJsonArray())
+                put("action", JsonPrimitive(resume.action.name))
+            }
+        )
+        emitDebugStatus(runId, DebugSessionStatus.STREAMING, "debug resumed", updated.pageAlias, updated.contextId, updated.lastError)
+        return runDebugSessions[runId] ?: updated
+    }
+
+    fun stepDebug(runId: String): RunDebugSession {
+        getRunById(runId)
+        val current = runDebugSessions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+        if (!debugExecutionGate.isPaused(runId)) {
+            throw BadRequestException("运行 $runId 当前不处于暂停态", mapOf("code" to ErrorCodes.DEBUG_CONTROL_INVALID))
+        }
+        val resume = debugExecutionGate.stepRun(runId)
+        val updated = current.copy(
+            status = DebugSessionStatus.STREAMING,
+            currentStepId = resume.stepId ?: current.currentStepId,
+            currentStepPath = resume.stepPath.ifEmpty { current.currentStepPath }
+        )
+        runDebugSessions[runId] = updated
+        emit(
+            runId,
+            EventType.DEBUG_STEPPED,
+            buildJsonObject {
+                put("stepId", resume.stepId?.let(::JsonPrimitive) ?: JsonNull)
+                put("stepPath", resume.stepPath.toJsonArray())
+                put("action", JsonPrimitive(resume.action.name))
+            }
+        )
+        emitDebugStatus(runId, DebugSessionStatus.STREAMING, "debug stepped", updated.pageAlias, updated.contextId, updated.lastError)
+        return runDebugSessions[runId] ?: updated
     }
 
     fun openDebugBrowser(runId: String): RunDebugSession {
@@ -235,6 +311,7 @@ class RunService(
             throw BadRequestException("运行状态为 ${run.status}，无法取消")
         }
         runningJobs[runId]?.cancel(CancellationException("Canceled by user"))
+        debugExecutionGate.cancel(runId)
         val canceled = run.copy(
             status = RunStatus.CANCELED,
             finishedAt = nowIso(),
@@ -261,6 +338,7 @@ class RunService(
         if (run.status == RunStatus.RUNNING || run.status == RunStatus.PENDING) {
             runningJobs[runId]?.cancel(CancellationException("Deleted by user"))
         }
+        debugExecutionGate.unregister(runId)
         cleanupRuntime(runId)
         val deleted = runRepository.delete(runId)
         invalidateRunCaches(runId)
@@ -418,10 +496,14 @@ class RunService(
             }
 
             val stepPath = pathPrefix + step.id
+            if (debug?.enabled == true) {
+                maybePauseBeforeStep(runId, step, stepPath, outputs, session, debug)
+            }
             persistRun(current.copy(currentStepId = step.id, status = RunStatus.RUNNING))
             emit(runId, EventType.STEP_STARTED, buildStepPayload(step, stepPath))
             if (debug?.enabled == true) {
                 emitDebugStatus(runId, DebugSessionStatus.STREAMING, "step started", session.currentPageAlias(), session.currentContextId())
+                emitDebugContext(runId, step.id, stepPath, outputs, session)
                 emitDebugPreview(runId, session, debug)
             }
             emit(
@@ -454,6 +536,7 @@ class RunService(
                     }
                 )
                 if (debug?.enabled == true) {
+                    emitDebugContext(runId, step.id, stepPath, outputs, session)
                     emitDebugStatus(
                         runId,
                         DebugSessionStatus.STREAMING,
@@ -462,6 +545,9 @@ class RunService(
                         result.first.contextId ?: session.currentContextId()
                     )
                     emitDebugPreview(runId, session, debug)
+                }
+                if (debug?.enabled == true) {
+                    debugExecutionGate.onStepCompleted(runId, step.id)
                 }
                 if (result.second) {
                     throw LoopBreakSignal()
@@ -588,6 +674,41 @@ class RunService(
                     }
                 }
                 StepExecutionResult(contextId = session.currentContextId()) to false
+            }
+
+            "callWorkflow" -> {
+                if (workflowCallDepth(stepPath) >= MAX_CALL_WORKFLOW_DEPTH) {
+                    throw BadRequestException(
+                        "callWorkflow 嵌套层数超过限制: $MAX_CALL_WORKFLOW_DEPTH",
+                        mapOf("code" to ErrorCodes.WORKFLOW_REFERENCE_INVALID, "field" to "workflowId")
+                    )
+                }
+                val workflowId = resolveRequiredText(step.data.config, "workflowId", outputs)
+                val targetTemplate = templateService.getTemplateById(workflowId)
+                val childOutputs = outputs.toMutableMap()
+                applyWorkflowInputMapping(step.data.config, outputs, childOutputs)
+                emitControlFlowLog(runId, stepPath, "CallWorkflow 调用模板: ${targetTemplate.name}")
+                executeSteps(
+                    runId,
+                    targetTemplate.steps,
+                    session,
+                    childOutputs,
+                    artifacts,
+                    stepPath + "callWorkflow",
+                    loopDepth,
+                    debug
+                )
+                val outputVar = resolveOptionalText(step.data.config, "outputVar", outputs)
+                    ?: resolveOptionalText(step.data.config, "saveAs", outputs)
+                val childDelta = buildWorkflowOutputDelta(outputs, childOutputs)
+                val outputMap = if (!outputVar.isNullOrBlank()) {
+                    mapOf(
+                        outputVar to serializeWorkflowOutput(childDelta)
+                    )
+                } else {
+                    emptyMap()
+                }
+                StepExecutionResult(outputs = outputMap, contextId = session.currentContextId()) to false
             }
 
             "startBrowser" -> {
@@ -745,6 +866,7 @@ class RunService(
     private fun cleanupRuntime(runId: String) {
         runningJobs.remove(runId)
         stopDebugPreviewLoop(runId)
+        debugExecutionGate.unregister(runId)
         activeDebugSessions.remove(runId)
         debugPreviewLocks.remove(runId)
         eventFlows.remove(runId)
@@ -798,7 +920,10 @@ class RunService(
         pageAlias: String? = null,
         contextId: String? = null,
         lastFrameTs: String? = null,
-        lastError: String? = null
+        lastError: String? = null,
+        currentStepId: String? = null,
+        currentStepPath: List<String> = emptyList(),
+        latestContext: RunDebugContextSnapshot? = null
     ): RunDebugSession {
         return RunDebugSession(
             enabled = enabled,
@@ -806,11 +931,16 @@ class RunService(
             openDevtools = openDevtools,
             previewFps = previewFps,
             previewQuality = previewQuality,
+            pauseOnStart = pauseOnStart,
+            breakpoints = breakpoints,
             status = status,
+            currentStepId = currentStepId,
+            currentStepPath = currentStepPath,
             pageAlias = pageAlias,
             contextId = contextId,
             lastFrameTs = lastFrameTs,
-            lastError = lastError
+            lastError = lastError,
+            latestContext = latestContext
         )
     }
 
@@ -826,6 +956,10 @@ class RunService(
                 put("openDevtools", JsonPrimitive(debug.openDevtools))
                 put("previewFps", JsonPrimitive(debug.previewFps))
                 put("previewQuality", JsonPrimitive(debug.previewQuality))
+                put("pauseOnStart", JsonPrimitive(debug.pauseOnStart))
+                put("breakpoints", buildJsonArray {
+                    debug.breakpoints.forEach { add(JsonPrimitive(it)) }
+                })
             }
         )
     }
@@ -840,7 +974,17 @@ class RunService(
     ) {
         val options = runDebugOptions[runId] ?: return
         val now = nowIso()
-        val session = options.toSession(status, pageAlias, contextId, runDebugSessions[runId]?.lastFrameTs, lastError)
+        val current = runDebugSessions[runId]
+        val session = options.toSession(
+            status = status,
+            pageAlias = pageAlias,
+            contextId = contextId,
+            lastFrameTs = current?.lastFrameTs,
+            lastError = lastError,
+            currentStepId = current?.currentStepId,
+            currentStepPath = current?.currentStepPath ?: emptyList(),
+            latestContext = current?.latestContext
+        )
         runDebugSessions[runId] = session
         emit(
             runId,
@@ -861,12 +1005,16 @@ class RunService(
             if (closedDebugRuns.contains(runId)) return
             val frame = session.capturePreviewFrame(debug.previewQuality) ?: return
             val now = nowIso()
+            val current = runDebugSessions[runId]
             runDebugSessions[runId] = debug.toSession(
                 status = DebugSessionStatus.STREAMING,
                 pageAlias = frame.pageAlias,
                 contextId = frame.contextId,
                 lastFrameTs = now,
-                lastError = runDebugSessions[runId]?.lastError
+                lastError = current?.lastError,
+                currentStepId = current?.currentStepId,
+                currentStepPath = current?.currentStepPath ?: emptyList(),
+                latestContext = current?.latestContext
             )
             emit(
                 runId,
@@ -893,12 +1041,16 @@ class RunService(
         contextId: String? = null
     ) {
         val options = runDebugOptions[runId] ?: return
+        val current = runDebugSessions[runId]
         runDebugSessions[runId] = options.toSession(
             status = DebugSessionStatus.ERROR,
             pageAlias = pageAlias,
             contextId = contextId,
-            lastFrameTs = runDebugSessions[runId]?.lastFrameTs,
-            lastError = message
+            lastFrameTs = current?.lastFrameTs,
+            lastError = message,
+            currentStepId = current?.currentStepId,
+            currentStepPath = current?.currentStepPath ?: emptyList(),
+            latestContext = current?.latestContext
         )
         emit(
             runId,
@@ -921,7 +1073,10 @@ class RunService(
             pageAlias = current?.pageAlias,
             contextId = current?.contextId,
             lastFrameTs = current?.lastFrameTs,
-            lastError = errorMessage
+            lastError = errorMessage,
+            currentStepId = current?.currentStepId,
+            currentStepPath = current?.currentStepPath ?: emptyList(),
+            latestContext = current?.latestContext
         )
         emit(
             runId,
@@ -935,6 +1090,93 @@ class RunService(
                 put("error", errorMessage?.let(::JsonPrimitive) ?: JsonNull)
             }
         )
+    }
+
+    private fun emitDebugContext(
+        runId: String,
+        stepId: String,
+        stepPath: List<String>,
+        outputs: Map<String, String>,
+        session: PlaywrightRunSession
+    ) {
+        val options = runDebugOptions[runId] ?: return
+        val snapshot = RunDebugContextSnapshot(
+            stepId = stepId,
+            stepPath = stepPath,
+            pageAlias = session.currentPageAlias(),
+            contextId = session.currentContextId(),
+            variables = outputs.toMap(),
+            updatedAt = nowIso()
+        )
+        val current = runDebugSessions[runId]
+        runDebugSessions[runId] = options.toSession(
+            status = current?.status ?: DebugSessionStatus.STREAMING,
+            pageAlias = snapshot.pageAlias,
+            contextId = snapshot.contextId,
+            lastFrameTs = current?.lastFrameTs,
+            lastError = current?.lastError,
+            currentStepId = stepId,
+            currentStepPath = stepPath,
+            latestContext = snapshot
+        )
+        emit(
+            runId,
+            EventType.DEBUG_CONTEXT_UPDATED,
+            buildJsonObject {
+                put("stepId", stepId.let(::JsonPrimitive))
+                put("stepPath", stepPath.toJsonArray())
+                put("pageAlias", snapshot.pageAlias?.let(::JsonPrimitive) ?: JsonNull)
+                put("contextId", snapshot.contextId?.let(::JsonPrimitive) ?: JsonNull)
+                put("variables", buildJsonObject {
+                    snapshot.variables.forEach { (key, value) ->
+                        put(key, JsonPrimitive(value))
+                    }
+                })
+                put("ts", JsonPrimitive(snapshot.updatedAt))
+            }
+        )
+    }
+
+    private fun maybePauseBeforeStep(
+        runId: String,
+        step: StepNode,
+        stepPath: List<String>,
+        outputs: Map<String, String>,
+        session: PlaywrightRunSession,
+        debug: RunDebugOptions
+    ) {
+        val pauseReason = debugExecutionGate.preparePause(runId, step.id, stepPath) ?: return
+        val reasonText = when (pauseReason.reasonType) {
+            DebugPauseReasonType.PAUSE_ON_START -> "pause on start"
+            DebugPauseReasonType.BREAKPOINT -> "breakpoint hit"
+            DebugPauseReasonType.STEP_COMPLETE -> "step completed, paused again"
+        }
+        emitDebugContext(runId, step.id, stepPath, outputs, session)
+        val current = runDebugSessions[runId]
+        runDebugSessions[runId] = (current ?: debug.toSession(status = DebugSessionStatus.PAUSED)).copy(
+            status = DebugSessionStatus.PAUSED,
+            currentStepId = step.id,
+            currentStepPath = stepPath,
+            pageAlias = session.currentPageAlias(),
+            contextId = session.currentContextId()
+        )
+        emit(
+            runId,
+            EventType.DEBUG_BREAKPOINT_HIT,
+            buildJsonObject {
+                put("stepId", JsonPrimitive(step.id))
+                put("stepType", JsonPrimitive(step.type))
+                put("stepPath", stepPath.toJsonArray())
+                put("reason", JsonPrimitive(reasonText))
+                put("reasonType", JsonPrimitive(pauseReason.reasonType.name))
+                put("pageAlias", session.currentPageAlias()?.let(::JsonPrimitive) ?: JsonNull)
+                put("contextId", JsonPrimitive(session.currentContextId()))
+                putParentPayload(stepPath)
+            }
+        )
+        emitDebugStatus(runId, DebugSessionStatus.PAUSED, reasonText, session.currentPageAlias(), session.currentContextId(), current?.lastError)
+        emitDebugPreview(runId, session, debug)
+        debugExecutionGate.awaitResume(runId)
     }
 
     private fun persistRun(run: Run): Run {
