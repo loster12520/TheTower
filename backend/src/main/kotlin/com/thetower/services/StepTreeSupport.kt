@@ -151,7 +151,38 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
                 validateNonBlankText(step, "inputVar")
                 validateNonBlankText(step, "saveAs")
             }
+
+            "keyboardPress" -> {
+                validateNonBlankText(step, "key")
+            }
+
+            "keyboardHotkey" -> {
+                validateNonBlankText(step, "key")
+            }
+
+            "textExtract" -> {
+                validateNonBlankText(step, "input")
+                validateNonBlankText(step, "pattern")
+                validateNonBlankText(step, "saveAs")
+            }
+
+            "goBack" -> Unit
+
+            "closeOtherPages" -> {
+                val keep = step.data.config["keep"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase() ?: "current"
+                if (keep !in setOf("current", "alias")) {
+                    throw InvalidStepConfigException(
+                        "closeOtherPages.keep 不支持: $keep",
+                        mapOf("stepId" to step.id, "field" to "keep")
+                    )
+                }
+                if (keep == "alias") {
+                    validateNonBlankText(step, "pageAlias")
+                }
+            }
         }
+
+        validateElementOrder(step)
     }
 }
 
@@ -491,4 +522,23 @@ private fun compareNumeric(left: String?, right: String?): Int {
     val rightNumber = right?.toDoubleOrNull()
         ?: throw InvalidStepConfigException("条件比较右值不是数字", mapOf("field" to "condition.right"))
     return leftNumber.compareTo(rightNumber)
+}
+
+private fun validateElementOrder(step: StepNode) {
+    val order = step.data.config["elementOrder"]?.jsonObject ?: return
+    val mode = (order["type"]?.jsonPrimitive?.contentOrNull ?: order["mode"]?.jsonPrimitive?.contentOrNull)?.trim()?.lowercase()
+        ?: return
+    val allowed = setOf("first", "last", "index", "random", "fixed", "randomrange")
+    if (mode !in allowed) {
+        throw InvalidStepConfigException(
+            "${step.type}.elementOrder 不支持: $mode",
+            mapOf("stepId" to step.id, "field" to "elementOrder")
+        )
+    }
+    if ((mode == "index" || mode == "fixed") && order["index"]?.jsonPrimitive?.intOrNull == null) {
+        throw InvalidStepConfigException(
+            "${step.type}.elementOrder.index 不能为空",
+            mapOf("stepId" to step.id, "field" to "elementOrder.index")
+        )
+    }
 }

@@ -127,6 +127,18 @@ class TemplateServiceTest {
     }
 
     @Test
+    fun `createTemplate accepts 0_0_8 schemaVersion`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "v008",
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        assertEquals("0.0.8", created.schemaVersion)
+    }
+
+    @Test
     fun `updateTemplateSteps rejects callWorkflow self reference`() {
         val created = service.createTemplate(
             CreateTemplateRequest(

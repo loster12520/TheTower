@@ -7,6 +7,37 @@ import com.microsoft.playwright.PlaywrightException
 import com.thetower.models.RunDebugOptions
 import com.thetower.utils.RunExecutionException
 
+class OpenedPlaywrightRunSession(
+    private val playwright: Playwright,
+    private val browser: Browser,
+    val session: PlaywrightRunSession
+) {
+    fun currentPageAlias(): String? = session.currentPageAlias()
+
+    fun currentContextId(): String = session.currentContextId()
+
+    fun bringDebugBrowserToFront() {
+        session.bringDebugBrowserToFront()
+    }
+
+    fun capturePreviewFrame(quality: Int) = session.capturePreviewFrame(quality)
+
+    fun executeStep(step: com.thetower.models.StepNode, outputs: MutableMap<String, String>) = session.executeStep(step, outputs)
+
+    fun collectForEachElement(config: kotlinx.serialization.json.JsonObject, outputs: MutableMap<String, String>) =
+        session.collectForEachElement(config, outputs)
+
+    fun pushBrowserContext(): String = session.pushBrowserContext()
+
+    fun restorePreviousContext(closeCurrent: Boolean): String = session.restorePreviousContext(closeCurrent)
+
+    fun closeQuietly() {
+        session.closeQuietly()
+        runCatching { browser.close() }
+        runCatching { playwright.close() }
+    }
+}
+
 data class PlaywrightExecutorConfig(
     val browser: String = "chromium",
     val headless: Boolean = true,
@@ -16,19 +47,22 @@ data class PlaywrightExecutorConfig(
 class PlaywrightRunExecutor(
     private val config: PlaywrightExecutorConfig
 ) {
-    fun <T> withSession(runId: String, debugOptions: RunDebugOptions? = null, block: (PlaywrightRunSession) -> T): T {
+    fun openSession(runId: String, debugOptions: RunDebugOptions? = null): OpenedPlaywrightRunSession {
         val playwright = Playwright.create()
         val browser = launchBrowser(playwright, debugOptions)
         val session = PlaywrightRunSession(runId, browser, config)
+        return OpenedPlaywrightRunSession(playwright, browser, session)
+    }
+
+    fun <T> withSession(runId: String, debugOptions: RunDebugOptions? = null, block: (PlaywrightRunSession) -> T): T {
+        val opened = openSession(runId, debugOptions)
 
         try {
-            return block(session)
+            return block(opened.session)
         } catch (ex: PlaywrightException) {
             throw RunExecutionException("Playwright 执行失败: ${ex.message}")
         } finally {
-            session.closeQuietly()
-            runCatching { browser.close() }
-            runCatching { playwright.close() }
+            opened.closeQuietly()
         }
     }
 

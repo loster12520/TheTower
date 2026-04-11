@@ -1,7 +1,9 @@
 .editor-page {
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  flex: 1;
   background: var(--color-bg-page);
 }
 
@@ -140,23 +142,77 @@
   width: 200px;
 }
 
+.editor-node-library__group {
+  position: relative;
+}
+
+.editor-node-library__group-title {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.editor-node-library__group-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border) 72%, var(--color-surface));
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  letter-spacing: normal;
+}
+
 .editor-node-library__item {
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--node-color) 28%, transparent);
-  background: color-mix(in srgb, var(--node-color) 10%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--node-color) 12%, transparent), transparent 62%),
+    color-mix(in srgb, var(--node-color) 9%, var(--color-surface));
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
   cursor: grab;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.editor-node-library__item:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--node-color) 50%, transparent);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+}
+
+.editor-node-library__icon-shell {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--node-color) 16%, white);
+  border: 1px solid color-mix(in srgb, var(--node-color) 24%, transparent);
+  flex-shrink: 0;
 }
 
 .editor-node-library__icon {
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .editor-node-library__label {
   font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 .editor-node-library__divider {

@@ -356,7 +356,7 @@ export default {
       id: `tpl-${generateId()}`,
       name: body.name || '未命名模板',
       description: body.description || null,
-      schemaVersion: body.schemaVersion || '0.0.6',
+      schemaVersion: body.schemaVersion || '0.0.8',
       steps: body.steps || [],
       otherStep: body.otherStep || { nodes: [], edges: [] },
       createdAt: now,

@@ -143,8 +143,8 @@ class TemplateService(
     }
 
     private fun validateSchemaVersion(schemaVersion: String) {
-        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4" && schemaVersion != "0.0.5" && schemaVersion != "0.0.6" && schemaVersion != "0.0.7") {
-            throw BadRequestException("schemaVersion 必须为 0.0.1、0.0.4、0.0.5、0.0.6 或 0.0.7", mapOf("field" to "schemaVersion"))
+        if (schemaVersion != "0.0.1" && schemaVersion != "0.0.4" && schemaVersion != "0.0.5" && schemaVersion != "0.0.6" && schemaVersion != "0.0.7" && schemaVersion != "0.0.8") {
+            throw BadRequestException("schemaVersion 必须为 0.0.1、0.0.4、0.0.5、0.0.6、0.0.7 或 0.0.8", mapOf("field" to "schemaVersion"))
         }
     }
 

@@ -62,6 +62,8 @@ const toDebugContext = (value: unknown): RunDebugContextSnapshot | null => {
 
   return {
     stepId: typeof record.stepId === 'string' ? record.stepId : null,
+    stepName: typeof record.stepName === 'string' ? record.stepName : null,
+    stepType: typeof record.stepType === 'string' ? record.stepType as RunDebugContextSnapshot['stepType'] : null,
     stepPath: normalizeStepPath(record.stepPath),
     pageAlias: typeof record.pageAlias === 'string' ? record.pageAlias : null,
     contextId: typeof record.contextId === 'string' ? record.contextId : null,
@@ -85,8 +87,10 @@ const buildDebugSession = (
   previewQuality: patch.previewQuality ?? current?.previewQuality ?? 60,
   pauseOnStart: patch.pauseOnStart ?? current?.pauseOnStart ?? false,
   breakpoints: patch.breakpoints ?? current?.breakpoints ?? [],
+  keepBrowserOnFinish: patch.keepBrowserOnFinish ?? current?.keepBrowserOnFinish ?? true,
   status: patch.status ?? current?.status ?? 'IDLE',
   currentStepId: patch.currentStepId ?? current?.currentStepId ?? null,
+  currentStepName: patch.currentStepName ?? current?.currentStepName ?? null,
   currentStepPath: patch.currentStepPath ?? current?.currentStepPath ?? [],
   pageAlias: patch.pageAlias ?? current?.pageAlias ?? null,
   contextId: patch.contextId ?? current?.contextId ?? null,
@@ -98,6 +102,7 @@ const buildDebugSession = (
 // 步骤执行状态
 export interface StepStatus {
   stepId: string;
+  stepName?: string | null;
   stepPath?: string[];
   status: 'pending' | 'running' | 'succeeded' | 'failed';
   outputs?: Record<string, string>;
@@ -127,6 +132,7 @@ class RunStore {
   
   // 当前执行到的步骤
   currentStepId: string | null = null;
+  currentStepName: string | null = null;
   currentStepPath: string[] | null = null;
 
   // 调试预览状态
@@ -157,6 +163,7 @@ class RunStore {
           ? buildDebugSession(null, { ...response.data.debug, latestContext })
           : null;
         this.latestDebugContext = latestContext;
+        this.currentStepName = latestContext?.stepName ?? response.data.debug?.currentStepName ?? null;
       });
 
       return true;
@@ -188,9 +195,11 @@ class RunStore {
 
     try {
       const response = await runApi.openDebugBrowser(this.currentRun.id);
+      const latestContext = toDebugContext(response.data.latestContext);
       runInAction(() => {
         this.error = null;
-        this.debugSession = response.data;
+        this.debugSession = buildDebugSession(this.debugSession, { ...response.data, latestContext });
+        this.latestDebugContext = latestContext || this.latestDebugContext;
       });
       return true;
     } catch (error) {
@@ -212,11 +221,13 @@ class RunStore {
         if (latestContext) {
           this.debugSession = buildDebugSession(this.debugSession, {
             currentStepId: latestContext.stepId ?? null,
+            currentStepName: latestContext.stepName ?? null,
             currentStepPath: latestContext.stepPath,
             pageAlias: latestContext.pageAlias ?? null,
             contextId: latestContext.contextId ?? null,
             latestContext,
           });
+          this.currentStepName = latestContext.stepName ?? this.currentStepName;
         }
       });
       return true;
@@ -271,10 +282,14 @@ class RunStore {
 
     try {
       const response = await runApi.closeDebug(this.currentRun.id);
+      const latestContext = toDebugContext(response.data.latestContext) || this.latestDebugContext;
       runInAction(() => {
         this.error = null;
-        this.debugSession = response.data;
-        this.latestDebugFrame = null;
+        this.debugSession = buildDebugSession(this.debugSession, { ...response.data, latestContext });
+        this.latestDebugContext = latestContext;
+        if (response.data.status === 'CLOSED') {
+          this.latestDebugFrame = null;
+        }
       });
       return true;
     } catch (error) {
@@ -298,15 +313,25 @@ class RunStore {
           {
             const stepId = event.payload.stepId as string;
             const stepPath = normalizeStepPath(event.payload.stepPath);
+            const stepName = typeof event.payload.stepName === 'string' ? event.payload.stepName : null;
             this.currentStepId = stepId;
+            this.currentStepName = stepName;
             this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
             const status: StepStatus = {
               stepId,
+              stepName,
               stepPath: this.currentStepPath,
               status: 'running',
             };
             this.stepStatusMap.set(stepId, status);
             this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+            if (this.debugSession) {
+              this.debugSession = buildDebugSession(this.debugSession, {
+                currentStepId: stepId,
+                currentStepName: stepName,
+                currentStepPath: this.currentStepPath,
+              });
+            }
           }
           break;
 
@@ -314,10 +339,13 @@ class RunStore {
           {
             const stepId = event.payload.stepId as string;
             const stepPath = normalizeStepPath(event.payload.stepPath);
+            const stepName = typeof event.payload.stepName === 'string' ? event.payload.stepName : null;
             this.currentStepId = stepId;
+            this.currentStepName = stepName;
             this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
             const status: StepStatus = {
               stepId,
+              stepName,
               stepPath: this.currentStepPath,
               status: 'succeeded',
               outputs: event.payload.outputs as Record<string, string>,
@@ -327,6 +355,13 @@ class RunStore {
             };
             this.stepStatusMap.set(stepId, status);
             this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+            if (this.debugSession) {
+              this.debugSession = buildDebugSession(this.debugSession, {
+                currentStepId: stepId,
+                currentStepName: stepName,
+                currentStepPath: this.currentStepPath,
+              });
+            }
             if (this.currentRun) {
               this.currentRun.outputs = {
                 ...this.currentRun.outputs,
@@ -341,16 +376,26 @@ class RunStore {
           {
             const stepId = event.payload.stepId as string;
             const stepPath = normalizeStepPath(event.payload.stepPath);
+            const stepName = typeof event.payload.stepName === 'string' ? event.payload.stepName : null;
             this.currentStepId = stepId;
+            this.currentStepName = stepName;
             this.currentStepPath = stepPath.length > 0 ? stepPath : [stepId];
             const status: StepStatus = {
               stepId,
+              stepName,
               stepPath: this.currentStepPath,
               status: 'failed',
               error: event.payload.error as { code: string; message: string },
             };
             this.stepStatusMap.set(stepId, status);
             this.stepPathStatusMap.set(toPathKey(status.stepPath || [stepId]), status);
+            if (this.debugSession) {
+              this.debugSession = buildDebugSession(this.debugSession, {
+                currentStepId: stepId,
+                currentStepName: stepName,
+                currentStepPath: this.currentStepPath,
+              });
+            }
           }
           break;
 
@@ -370,16 +415,19 @@ class RunStore {
             previewFps: Number(event.payload.previewFps || 2),
             previewQuality: Number(event.payload.previewQuality || 60),
             pauseOnStart: Boolean(event.payload.pauseOnStart),
+            keepBrowserOnFinish: event.payload.keepBrowserOnFinish === undefined ? true : Boolean(event.payload.keepBrowserOnFinish),
             breakpoints: Array.isArray(event.payload.breakpoints)
               ? (event.payload.breakpoints as string[])
               : this.debugSession?.breakpoints ?? [],
             status: (event.payload.status as RunDebugSession['status']) || 'STARTING',
+            currentStepName: (event.payload.currentStepName as string | undefined) ?? this.debugSession?.currentStepName ?? null,
           });
           break;
 
         case 'DEBUG_STATUS_CHANGED':
           this.debugSession = buildDebugSession(this.debugSession, {
             status: (event.payload.status as RunDebugSession['status']) || this.debugSession?.status || 'IDLE',
+            currentStepName: (event.payload.currentStepName as string | undefined) ?? this.debugSession?.currentStepName ?? null,
             pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
             contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
             lastFrameTs: (event.payload.ts as string | undefined) ?? this.debugSession?.lastFrameTs ?? null,
@@ -393,22 +441,26 @@ class RunStore {
               this.latestDebugContext = snapshot;
               this.debugSession = buildDebugSession(this.debugSession, {
                 currentStepId: snapshot.stepId ?? null,
+                currentStepName: snapshot.stepName ?? null,
                 currentStepPath: snapshot.stepPath,
                 pageAlias: snapshot.pageAlias ?? null,
                 contextId: snapshot.contextId ?? null,
                 latestContext: snapshot,
               });
+              this.currentStepName = snapshot.stepName ?? this.currentStepName;
             }
           }
           break;
 
         case 'DEBUG_BREAKPOINT_HIT':
           this.currentStepId = (event.payload.stepId as string) || this.currentStepId;
+          this.currentStepName = (event.payload.stepName as string | undefined) || this.currentStepName;
           this.currentStepPath = normalizeStepPath(event.payload.stepPath);
           this.lastDebugReason = (event.payload.reason as string | undefined) || null;
           this.debugSession = buildDebugSession(this.debugSession, {
             status: 'PAUSED',
             currentStepId: this.currentStepId,
+            currentStepName: this.currentStepName,
             currentStepPath: this.currentStepPath || [],
             pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
             contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
@@ -418,11 +470,13 @@ class RunStore {
         case 'DEBUG_RESUMED':
         case 'DEBUG_STEPPED':
           this.currentStepId = (event.payload.stepId as string) || this.currentStepId;
+          this.currentStepName = (event.payload.stepName as string | undefined) || this.currentStepName;
           this.currentStepPath = normalizeStepPath(event.payload.stepPath);
           this.lastDebugReason = null;
           this.debugSession = buildDebugSession(this.debugSession, {
             status: 'STREAMING',
             currentStepId: this.currentStepId,
+            currentStepName: this.currentStepName,
             currentStepPath: this.currentStepPath || [],
           });
           break;
@@ -449,6 +503,7 @@ class RunStore {
           if (this.debugSession) {
             this.debugSession = buildDebugSession(this.debugSession, {
               status: (event.payload.status as RunDebugSession['status']) || 'CLOSED',
+              currentStepName: (event.payload.currentStepName as string | undefined) ?? this.debugSession.currentStepName ?? null,
               pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession.pageAlias ?? null,
               contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession.contextId ?? null,
               lastFrameTs: (event.payload.lastFrameTs as string | null | undefined) ?? this.debugSession.lastFrameTs ?? null,
@@ -509,6 +564,7 @@ class RunStore {
     this.stepStatusMap.clear();
     this.stepPathStatusMap.clear();
     this.currentStepId = null;
+    this.currentStepName = null;
     this.currentStepPath = null;
     this.error = null;
     this.debugSession = null;
@@ -599,6 +655,22 @@ class RunStore {
     return this.debugSession?.status === 'PAUSED';
   }
 
+  get currentStepDisplayName(): string | null {
+    if (this.debugSession?.currentStepName) {
+      return this.debugSession.currentStepName;
+    }
+
+    if (this.latestDebugContext?.stepName) {
+      return this.latestDebugContext.stepName;
+    }
+
+    if (this.currentStepId) {
+      return this.stepStatusMap.get(this.currentStepId)?.stepName ?? this.currentStepName;
+    }
+
+    return this.currentStepName;
+  }
+
   get debugStatusText(): string {
     const status = this.debugSession?.status;
     const mapping: Record<DebugSessionStatus, string> = {
@@ -606,6 +678,8 @@ class RunStore {
       STARTING: '启动中',
       STREAMING: '运行中',
       PAUSED: '已暂停',
+      COMPLETED_WAITING_CLOSE: '运行完成，等待关闭',
+      FAILED_WAITING_CLOSE: '运行失败，等待关闭',
       CLOSED: '已关闭',
       ERROR: '异常',
     };

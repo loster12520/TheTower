@@ -46,6 +46,11 @@ export type StepType =
   | 'type'
   | 'waitFor'
   | 'extract'
+  | 'keyboardPress'
+  | 'keyboardHotkey'
+  | 'textExtract'
+  | 'goBack'
+  | 'closeOtherPages'
   | 'newPage'
   | 'closePage'
   | 'switchPage'
@@ -117,13 +122,27 @@ export interface ConditionConfig {
 export type NodeConfig = Record<string, unknown> & {
   url?: string;
   selector?: string;
+  elementRefVar?: string;
+  elementOrder?: {
+    type?: 'first' | 'last' | 'index' | 'random' | 'randomRange';
+    index?: number;
+    min?: number;
+    max?: number;
+  };
   text?: string;
+  key?: string;
+  modifiers?: string[] | string;
+  input?: string;
+  pattern?: string;
+  groupIndex?: number;
   waitMs?: number;
   saveAs?: string;
   as?: string;
   extractType?: string;
   mode?: string;
   attributeName?: string;
+  pageAlias?: string;
+  keep?: 'current' | 'alias';
   breakpoint?: boolean;
   workflowId?: string;
   inputMapping?: Record<string, string>;
@@ -165,12 +184,23 @@ export interface RunDebugOptions {
   previewQuality?: number;
   pauseOnStart?: boolean;
   breakpoints?: string[];
+  keepBrowserOnFinish?: boolean;
 }
 
-export type DebugSessionStatus = 'IDLE' | 'STARTING' | 'STREAMING' | 'PAUSED' | 'CLOSED' | 'ERROR';
+export type DebugSessionStatus =
+  | 'IDLE'
+  | 'STARTING'
+  | 'STREAMING'
+  | 'PAUSED'
+  | 'COMPLETED_WAITING_CLOSE'
+  | 'FAILED_WAITING_CLOSE'
+  | 'CLOSED'
+  | 'ERROR';
 
 export interface RunDebugContextSnapshot {
   stepId?: string | null;
+  stepName?: string | null;
+  stepType?: StepType | null;
   stepPath: string[];
   pageAlias?: string | null;
   contextId?: string | null;
@@ -186,8 +216,10 @@ export interface RunDebugSession {
   previewQuality: number;
   pauseOnStart: boolean;
   breakpoints: string[];
+  keepBrowserOnFinish: boolean;
   status: DebugSessionStatus;
   currentStepId?: string | null;
+  currentStepName?: string | null;
   currentStepPath: string[];
   pageAlias?: string | null;
   contextId?: string | null;

@@ -2,8 +2,8 @@ import { makeAutoObservable, runInAction } from 'mobx';
 import { templateApi } from '@/services/api';
 import type { WorkflowTemplate, TemplateSummary, ApiError } from '@/models';
 
-export const DEFAULT_TEMPLATE_SCHEMA_VERSION = '0.0.7';
-export const SUPPORTED_TEMPLATE_SCHEMA_VERSIONS = ['0.0.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7'] as const;
+export const DEFAULT_TEMPLATE_SCHEMA_VERSION = '0.0.8';
+export const SUPPORTED_TEMPLATE_SCHEMA_VERSIONS = ['0.0.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.0.8'] as const;
 
 // 列表项（不包含完整 steps）
 export type TemplateListItem = TemplateSummary;

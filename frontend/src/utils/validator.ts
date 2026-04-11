@@ -95,50 +95,15 @@ function validateOpenUrl(step: Step): ValidationError[] {
  * 验证 click 节点
  */
 function validateClick(step: Step): ValidationError[] {
-  const errors: ValidationError[] = [];
-  const config = step.data.config as { selector?: string };
-
-  if (!config.selector || config.selector.trim().length === 0) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器不能为空',
-    });
-  } else if (!isValidSelector(config.selector)) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器格式不正确',
-    });
-  }
-
-  return errors;
+  return validateSelectorOrElementRefTarget(step);
 }
 
 /**
  * 验证 type 节点
  */
 function validateType(step: Step): ValidationError[] {
-  const errors: ValidationError[] = [];
-  const config = step.data.config as { selector?: string; text?: string };
-
-  if (!config.selector || config.selector.trim().length === 0) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器不能为空',
-    });
-  } else if (!isValidSelector(config.selector)) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器格式不正确',
-    });
-  }
+  const errors = validateSelectorOrElementRefTarget(step);
+  const config = step.data.config as { text?: string };
 
   // text 可以为空字符串，但必须存在
   if (config.text === undefined || config.text === null) {
@@ -220,6 +185,7 @@ function validateExtract(step: Step): ValidationError[] {
   const errors: ValidationError[] = [];
   const config = step.data.config as {
     selector?: string;
+    elementRefVar?: string;
     saveAs?: string;
     as?: string;
     extractType?: string;
@@ -228,22 +194,7 @@ function validateExtract(step: Step): ValidationError[] {
     childTagName?: string;
   };
 
-  // 验证 selector
-  if (!config.selector || config.selector.trim().length === 0) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器不能为空',
-    });
-  } else if (!isValidSelector(config.selector)) {
-    errors.push({
-      stepId: step.id,
-      stepLabel: step.data.label,
-      field: 'selector',
-      message: '元素选择器格式不正确',
-    });
-  }
+  errors.push(...validateSelectorOrElementRefTarget(step));
 
   // 验证变量名
   const outputName = config.saveAs || config.as;
@@ -295,6 +246,138 @@ function validateExtract(step: Step): ValidationError[] {
     });
   }
 
+  return errors;
+}
+
+function validateTextExtract(step: Step): ValidationError[] {
+  const config = step.data.config as { input?: string; pattern?: string; saveAs?: string; groupIndex?: number };
+  const errors = validateSimpleRequired(step, ['input', 'pattern', 'saveAs']);
+
+  if (config.saveAs && !isValidVariableName(config.saveAs)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'saveAs',
+      message: '结果变量名格式不正确，必须以字母或下划线开头，只能包含字母、数字、下划线',
+    });
+  }
+
+  if (config.groupIndex !== undefined && (Number.isNaN(Number(config.groupIndex)) || Number(config.groupIndex) < 0)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'groupIndex',
+      message: '分组序号必须为大于等于 0 的整数',
+    });
+  }
+
+  return errors;
+}
+
+function validateCloseOtherPages(step: Step): ValidationError[] {
+  const config = step.data.config as { keep?: string; pageAlias?: string };
+  const errors: ValidationError[] = [];
+  const keep = (config.keep || 'current').trim();
+
+  if (!['current', 'alias'].includes(keep)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'keep',
+      message: '保留页面仅支持 current 或 alias',
+    });
+  }
+
+  if (keep === 'alias' && (!config.pageAlias || config.pageAlias.trim().length === 0)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'pageAlias',
+      message: '按别名保留页面时必须填写 pageAlias',
+    });
+  }
+
+  return errors;
+}
+
+function validateElementOrderConfig(step: Step): ValidationError[] {
+  const config = step.data.config as { elementOrder?: Record<string, unknown> };
+  const order = config.elementOrder;
+
+  if (!order || typeof order !== 'object') {
+    return [];
+  }
+
+  const type = typeof order.type === 'string' ? order.type : typeof order.mode === 'string' ? order.mode : 'first';
+  const normalizedType = type.toLowerCase();
+  const errors: ValidationError[] = [];
+
+  if (!['first', 'last', 'index', 'random', 'randomrange'].includes(normalizedType)) {
+    errors.push({
+      stepId: step.id,
+      stepLabel: step.data.label,
+      field: 'elementOrder.type',
+      message: '元素顺序仅支持 first、last、index、random、randomRange',
+    });
+    return errors;
+  }
+
+  if (normalizedType === 'index') {
+    const index = Number(order.index);
+    if (Number.isNaN(index) || !Number.isInteger(index) || index < 0) {
+      errors.push({
+        stepId: step.id,
+        stepLabel: step.data.label,
+        field: 'elementOrder.index',
+        message: '元素序号必须为大于等于 0 的整数',
+      });
+    }
+  }
+
+  if (normalizedType === 'randomrange') {
+    const min = Number(order.min);
+    const max = Number(order.max);
+    if (Number.isNaN(min) || !Number.isInteger(min) || min < 0) {
+      errors.push({
+        stepId: step.id,
+        stepLabel: step.data.label,
+        field: 'elementOrder.min',
+        message: '随机范围最小值必须为大于等于 0 的整数',
+      });
+    }
+    if (Number.isNaN(max) || !Number.isInteger(max) || max < 0) {
+      errors.push({
+        stepId: step.id,
+        stepLabel: step.data.label,
+        field: 'elementOrder.max',
+        message: '随机范围最大值必须为大于等于 0 的整数',
+      });
+    }
+  }
+
+  return errors;
+}
+
+function validateSelectorOrElementRefTarget(step: Step): ValidationError[] {
+  const config = step.data.config as Record<string, unknown>;
+  const selector = typeof config.selector === 'string' ? config.selector.trim() : '';
+  const elementRefVar = typeof config.elementRefVar === 'string' ? config.elementRefVar.trim() : '';
+  const errors: ValidationError[] = [];
+
+  if (!selector && !elementRefVar) {
+    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'selector', message: '元素选择器或元素引用变量至少填写一项' });
+    return errors;
+  }
+
+  if (selector && !isValidSelector(selector)) {
+    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'selector', message: '元素选择器格式不正确' });
+  }
+
+  if (elementRefVar && !isValidVariableName(elementRefVar)) {
+    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'elementRefVar', message: '元素引用变量格式不正确' });
+  }
+
+  errors.push(...validateElementOrderConfig(step));
   return errors;
 }
 
@@ -434,15 +517,8 @@ function validateBreak(step: Step, context: ValidationContext): ValidationError[
 }
 
 function validateSelectorStep(step: Step, extraRequiredFields: string[] = []): ValidationError[] {
-  const errors: ValidationError[] = [];
+  const errors = validateSelectorOrElementRefTarget(step);
   const config = step.data.config as Record<string, unknown>;
-  const selector = typeof config.selector === 'string' ? config.selector : '';
-
-  if (!selector || selector.trim().length === 0) {
-    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'selector', message: '元素选择器不能为空' });
-  } else if (!isValidSelector(selector)) {
-    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'selector', message: '元素选择器格式不正确' });
-  }
 
   extraRequiredFields.forEach((field) => {
     const value = config[field];
@@ -520,6 +596,16 @@ function validateSchemaStep(step: Step): ValidationError[] {
   const config = step.data.config as Record<string, unknown>;
 
   switch (step.type) {
+    case 'keyboardPress':
+      return validateSimpleRequired(step, ['key']);
+    case 'keyboardHotkey':
+      return validateSimpleRequired(step, ['key']);
+    case 'textExtract':
+      return validateTextExtract(step);
+    case 'goBack':
+      return [];
+    case 'closeOtherPages':
+      return validateCloseOtherPages(step);
     case 'newPage':
     case 'closePage':
     case 'reloadPage':
@@ -658,12 +744,9 @@ function validateCallWorkflow(step: Step): ValidationError[] {
 }
 
 function validateForEachElement(step: Step): ValidationError[] {
-  const config = step.data.config as { selector?: string; itemVar?: string; indexVar?: string; body?: Step[]; extractType?: string; attributeName?: string };
-  const errors: ValidationError[] = [];
+  const config = step.data.config as { selector?: string; elementRefVar?: string; itemVar?: string; indexVar?: string; body?: Step[]; extractType?: string; attributeName?: string };
+  const errors = validateSelectorOrElementRefTarget(step);
 
-  if (!config.selector || !isValidSelector(config.selector)) {
-    errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'selector', message: '元素选择器不能为空且格式必须正确' });
-  }
   if (!config.itemVar || !isValidVariableName(config.itemVar)) {
     errors.push({ stepId: step.id, stepLabel: step.data.label, field: 'itemVar', message: '项变量名格式不正确' });
   }
@@ -733,6 +816,12 @@ function validateStep(step: Step, context: ValidationContext): ValidationError[]
       return validateWaitFor(step);
     case 'extract':
       return validateExtract(step);
+    case 'keyboardPress':
+    case 'keyboardHotkey':
+    case 'textExtract':
+    case 'goBack':
+    case 'closeOtherPages':
+      return validateSchemaStep(step);
     case 'if':
       return validateIf(step, context);
     case 'forTimes':

@@ -268,7 +268,7 @@ class EditorStore {
 
     try {
       await templateApi.saveSteps(this.templateId, {
-        schemaVersion: '0.0.7',
+        schemaVersion: '0.0.8',
         steps: steps as Step[],
         otherStep
       });

@@ -4,7 +4,7 @@ test('home page should render template title and create button', async ({ page }
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '工作流模板' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新建模板' })).toBeVisible();
-  await expect(page.getByText('默认版本 0.0.7')).toBeVisible();
+  await expect(page.getByText('默认版本 0.0.8')).toBeVisible();
 });
 
 test('create template should navigate to editor page', async ({ page }) => {
@@ -17,7 +17,7 @@ test('create template should navigate to editor page', async ({ page }) => {
   const templateName = `E2E模板-${Date.now()}`;
   await dialog.locator('input[placeholder="例如：抓取网页标题"]').fill(templateName);
   await dialog.locator('textarea[placeholder="简要描述这个工作流的功能..."]').fill('Playwright 自动化创建');
-  await expect(dialog.getByText('schemaVersion 0.0.7')).toBeVisible();
+  await expect(dialog.getByText('schemaVersion 0.0.8')).toBeVisible();
   await dialog.getByRole('button', { name: /创\s*建/ }).click();
 
   await expect(page).toHaveURL(/\/editor\?id=/);
@@ -99,9 +99,9 @@ test('editor should render mini subflow previews before entering branch editor',
 test('editor should persist subflow node edits after save and reload', async ({ page }) => {
   await page.goto('/editor?id=tpl-004');
 
-  await page.getByText('判断登录状态').first().click();
+  await page.getByTestId('rf__node-step-if-001').click();
   await page.getByRole('button', { name: '编辑 THEN' }).first().click();
-  await page.getByText('点击继续').first().click();
+  await page.getByTestId('rf__node-step-then-001').click();
 
   const renamed = `继续按钮-${Date.now()}`;
   await page.getByLabel('节点名称').fill(renamed);
@@ -110,7 +110,7 @@ test('editor should persist subflow node edits after save and reload', async ({ 
   await expect(page.getByText('保存成功')).toBeVisible();
   await page.reload();
 
-  await page.getByText('判断登录状态').first().click();
+  await page.getByTestId('rf__node-step-if-001').click();
   await page.getByRole('button', { name: '编辑 THEN' }).first().click();
   await expect(page.getByText(renamed)).toBeVisible();
 });

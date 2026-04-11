@@ -42,6 +42,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -149,6 +150,11 @@ class PlaywrightRunSession(
             "convertJson" -> executeConvertJson(step.data.config, outputs)
             "extractKey" -> executeExtractKey(step.data.config, outputs)
             "randomGet" -> executeRandomGet(step.data.config, outputs)
+            "keyboardPress" -> executeKeyboardPress(step.data.config, outputs)
+            "keyboardHotkey" -> executeKeyboardHotkey(step.data.config, outputs)
+            "textExtract" -> executeTextExtract(step.data.config, outputs)
+            "goBack" -> executeGoBack(step.data.config, outputs)
+            "closeOtherPages" -> executeCloseOtherPages(step.data.config, outputs)
             else -> throw BadRequestException("不支持的步骤类型: ${step.type}")
         }
     }
@@ -638,6 +644,103 @@ class PlaywrightRunSession(
         return StepExecutionResult(outputs = mapOf(saveAs to selected), contextId = currentContextId())
     }
 
+    private fun executeKeyboardPress(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val key = resolveRequiredText(config, "key", outputs)
+        currentPage().keyboard().press(normalizeKeyboardKey(key))
+        return StepExecutionResult(pageAlias = currentPageAlias(), contextId = currentContextId())
+    }
+
+    private fun executeKeyboardHotkey(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val modifiers = resolveStringList(config, "modifiers", outputs)
+        val key = resolveRequiredText(config, "key", outputs)
+        val parts = modifiers.map(::normalizeKeyboardModifier) + normalizeKeyboardKey(key)
+        currentPage().keyboard().press(parts.joinToString("+"))
+        return StepExecutionResult(pageAlias = currentPageAlias(), contextId = currentContextId())
+    }
+
+    private fun executeTextExtract(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val input = resolveRequiredText(config, "input", outputs)
+        val pattern = resolveRequiredText(config, "pattern", outputs)
+        val groupIndex = resolveOptionalInt(config, "groupIndex", outputs) ?: 0
+        val global = resolveOptionalBoolean(config, "global", outputs) ?: false
+        val saveAs = resolveRequiredText(config, "saveAs", outputs)
+        val regex = runCatching { Regex(pattern) }.getOrElse {
+            throw BadRequestException(
+                "textExtract.pattern 非法: ${it.message}",
+                mapOf("field" to "pattern", "code" to ErrorCodes.TEXT_EXTRACT_CONFIG_INVALID)
+            )
+        }
+
+        val value = if (global) {
+            val matches: List<String> = regex.findAll(input).map { match ->
+                requireTextExtractGroup(match.groups.size, groupIndex)
+                match.groups[groupIndex]?.value.orEmpty()
+            }.toList()
+            buildJsonArray { matches.forEach { add(JsonPrimitive(it)) } }.toString()
+        } else {
+            val match = regex.find(input)
+                ?: throw BadRequestException(
+                    "textExtract 未匹配到结果",
+                    mapOf("field" to "pattern", "code" to ErrorCodes.TEXT_EXTRACT_CONFIG_INVALID)
+                )
+            requireTextExtractGroup(match.groups.size, groupIndex)
+            match.groups[groupIndex]?.value.orEmpty()
+        }
+
+        return StepExecutionResult(outputs = mapOf(saveAs to value), contextId = currentContextId())
+    }
+
+    private fun requireTextExtractGroup(groupCount: Int, groupIndex: Int) {
+        if (groupIndex < 0 || groupIndex >= groupCount) {
+            throw BadRequestException(
+                "textExtract.groupIndex 越界: $groupIndex",
+                mapOf("field" to "groupIndex", "code" to ErrorCodes.TEXT_EXTRACT_CONFIG_INVALID)
+            )
+        }
+    }
+
+    private fun executeGoBack(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val timeoutMs = resolveOptionalInt(config, "timeoutMs", outputs)?.toDouble()
+        if (timeoutMs != null) {
+            currentPage().goBack(Page.GoBackOptions().setTimeout(timeoutMs))
+        } else {
+            currentPage().goBack()
+        }
+        return StepExecutionResult(pageAlias = currentPageAlias(), contextId = currentContextId())
+    }
+
+    private fun executeCloseOtherPages(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val scope = currentScope()
+        val keep = (resolveOptionalText(config, "keep", outputs) ?: "current").lowercase()
+        val keepPage = when (keep) {
+            "current" -> scope.currentPage
+            "alias" -> {
+                val alias = resolveRequiredText(config, "pageAlias", outputs)
+                scope.pageAliases[alias]
+                    ?: throw BadRequestException(
+                        "未找到页面别名: $alias",
+                        mapOf("field" to "pageAlias", "code" to ErrorCodes.PAGE_STEP_CONFIG_INVALID)
+                    )
+            }
+
+            else -> throw BadRequestException(
+                "closeOtherPages.keep 不支持: $keep",
+                mapOf("field" to "keep", "code" to ErrorCodes.PAGE_STEP_CONFIG_INVALID)
+            )
+        }
+
+        val pagesToClose = scope.pages.filter { it != keepPage }
+        pagesToClose.forEach { page ->
+            removePage(scope, page)
+            runCatching { page.close() }
+        }
+        if (keepPage !in scope.pages) {
+            scope.pages.add(keepPage)
+        }
+        scope.currentPage = keepPage
+        return StepExecutionResult(pageAlias = findAlias(scope, keepPage), contextId = currentContextId())
+    }
+
     private fun executeCloseBrowser(): StepExecutionResult {
         val closedContextId = currentContextId()
         closeCurrentScopeAndReplace()
@@ -656,22 +759,25 @@ class PlaywrightRunSession(
     }
 
     private fun resolveElementTarget(config: JsonObject, outputs: MutableMap<String, String>): ElementTarget {
-        val selector = resolveOptionalText(config, "selector", outputs)
         val directOrder = config["elementOrder"]?.jsonObject
+        val refVar = resolveOptionalText(config, "elementRefVar", outputs)
+        if (!refVar.isNullOrBlank()) {
+            val raw = outputs[refVar]
+                ?: throw BadRequestException("未找到元素引用变量: $refVar", mapOf("field" to "elementRefVar"))
+            val parsed = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrElse {
+                throw BadRequestException("元素引用变量格式非法: $refVar")
+            }
+            val refSelector = parsed["selector"]?.jsonPrimitive?.content
+                ?: throw BadRequestException("元素引用变量缺少 selector: $refVar")
+            return ElementTarget(refSelector, directOrder ?: parsed["elementOrder"]?.jsonObject)
+        }
+
+        val selector = resolveOptionalText(config, "selector", outputs)
         if (!selector.isNullOrBlank()) {
             return ElementTarget(selector, directOrder)
         }
 
-        val refVar = resolveOptionalText(config, "elementRefVar", outputs)
-            ?: throw BadRequestException("缺少 selector 或 elementRefVar", mapOf("code" to ErrorCodes.ELEMENT_TARGET_INVALID))
-        val raw = outputs[refVar]
-            ?: throw BadRequestException("未找到元素引用变量: $refVar", mapOf("field" to "elementRefVar"))
-        val parsed = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrElse {
-            throw BadRequestException("元素引用变量格式非法: $refVar")
-        }
-        val refSelector = parsed["selector"]?.jsonPrimitive?.content
-            ?: throw BadRequestException("元素引用变量缺少 selector: $refVar")
-        return ElementTarget(refSelector, directOrder ?: parsed["elementOrder"]?.jsonObject)
+        throw BadRequestException("缺少 selector 或 elementRefVar", mapOf("code" to ErrorCodes.ELEMENT_TARGET_INVALID))
     }
 
     private fun resolveIndices(count: Int, order: JsonObject?, iterateAllByDefault: Boolean): List<Int> {
@@ -680,13 +786,29 @@ class PlaywrightRunSession(
             return if (iterateAllByDefault) (0 until count).toList() else listOf(0)
         }
 
-        val mode = order["mode"]?.jsonPrimitive?.contentOrNull?.lowercase() ?: return if (iterateAllByDefault) {
+        val mode = (order["type"]?.jsonPrimitive?.contentOrNull ?: order["mode"]?.jsonPrimitive?.contentOrNull)?.lowercase()
+            ?: return if (iterateAllByDefault) {
             (0 until count).toList()
         } else {
             listOf(0)
         }
 
         return when (mode) {
+            "first" -> listOf(0)
+
+            "last" -> listOf(count - 1)
+
+            "index", "fixed" -> {
+                val index = order["index"]?.jsonPrimitive?.intOrNull
+                    ?: throw BadRequestException(
+                        "elementOrder.index 不能为空",
+                        mapOf("field" to "elementOrder.index", "code" to ErrorCodes.ELEMENT_ORDER_INVALID)
+                    )
+                listOf(index.coerceIn(0, count - 1))
+            }
+
+            "random" -> listOf(Random.nextInt(0, count))
+
             "fixed" -> {
                 val index = order["index"]?.jsonPrimitive?.intOrNull ?: 0
                 listOf(index.coerceIn(0, count - 1))
@@ -705,6 +827,38 @@ class PlaywrightRunSession(
             }
 
             else -> if (iterateAllByDefault) (0 until count).toList() else listOf(0)
+        }
+    }
+
+    private fun normalizeKeyboardModifier(value: String): String {
+        return when (value.trim().lowercase()) {
+            "control", "ctrl" -> "Control"
+            "meta", "cmd", "command" -> "Meta"
+            "shift" -> "Shift"
+            "alt", "option" -> "Alt"
+            else -> throw BadRequestException(
+                "不支持的修饰键: $value",
+                mapOf("field" to "modifiers", "code" to ErrorCodes.KEYBOARD_STEP_CONFIG_INVALID)
+            )
+        }
+    }
+
+    private fun normalizeKeyboardKey(value: String): String {
+        return when (value.trim().lowercase()) {
+            "backspace" -> "Backspace"
+            "tab" -> "Tab"
+            "enter" -> "Enter"
+            "space", "spacebar" -> "Space"
+            "escape", "esc" -> "Escape"
+            "delete", "del" -> "Delete"
+            "arrowup", "up" -> "ArrowUp"
+            "arrowdown", "down" -> "ArrowDown"
+            "arrowleft", "left" -> "ArrowLeft"
+            "arrowright", "right" -> "ArrowRight"
+            else -> value.trim().takeIf { it.isNotBlank() } ?: throw BadRequestException(
+                "key 不能为空",
+                mapOf("field" to "key", "code" to ErrorCodes.KEYBOARD_STEP_CONFIG_INVALID)
+            )
         }
     }
 

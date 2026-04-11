@@ -12,7 +12,12 @@ open class ApiException(
 class BadRequestException(
     message: String,
     details: Map<String, String>? = null
-) : ApiException(HttpStatusCode.BadRequest, ErrorCodes.BAD_REQUEST, message, details)
+) : ApiException(
+    HttpStatusCode.BadRequest,
+    details?.get("code") ?: ErrorCodes.BAD_REQUEST,
+    message,
+    details?.filterKeys { it != "code" }
+)
 
 class InvalidStepConfigException(
     message: String,

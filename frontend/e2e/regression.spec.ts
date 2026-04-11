@@ -20,7 +20,7 @@ const dragNodeToCanvas = async (page: Page, label: string, targetPosition = { x:
 };
 
 const getFormInputByLabel = (page: Page, label: string) =>
-  page.locator('.ant-form-item').filter({ hasText: label }).locator('input').first();
+  page.locator('.ant-form-item').filter({ hasText: label }).locator('input:not([type="radio"]):not([type="checkbox"])').first();
 
 const getFormTextareaByLabel = (page: Page, label: string) =>
   page.locator('.ant-form-item').filter({ hasText: label }).locator('textarea').first();
@@ -141,6 +141,132 @@ test('editor should render left right handles and keep node stable when selected
   expect(Math.abs(afterSelect.height - beforeSelect.height)).toBeLessThan(1);
 });
 
+test('editor should avoid global scrollbar and keep side panels independently scrollable', async ({ page }) => {
+  const templateName = `回归滚动布局-${Date.now()}`;
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await createBlankTemplate(page, templateName, '用于验证编辑页不出现总滚动条');
+  await expect(page.locator('.editor-main__left')).toBeVisible();
+  await expect(page.locator('.editor-main__right')).toBeVisible();
+
+  const layoutMetrics = await page.evaluate(() => {
+    const doc = document.documentElement;
+    const body = document.body;
+    const left = document.querySelector('.editor-main__left');
+    const right = document.querySelector('.editor-main__right');
+    const layout = document.querySelector('.tt-layout');
+    const content = document.querySelector('.tt-layout-content');
+    const header = document.querySelector('.tt-layout-header');
+    const footer = document.querySelector('.tt-layout-footer');
+    const editorPage = document.querySelector('.editor-page');
+    if (!(left instanceof HTMLElement) || !(right instanceof HTMLElement)) {
+      throw new Error('未找到编辑器侧边栏');
+    }
+
+    const leftStyle = window.getComputedStyle(left);
+    const rightStyle = window.getComputedStyle(right);
+
+    return {
+      documentHasVerticalOverflow: doc.scrollHeight > doc.clientHeight + 1,
+      documentHasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
+      documentScrollHeight: doc.scrollHeight,
+      documentClientHeight: doc.clientHeight,
+      bodyScrollHeight: body.scrollHeight,
+      bodyClientHeight: body.clientHeight,
+      layoutHeight: layout instanceof HTMLElement ? layout.getBoundingClientRect().height : null,
+      contentHeight: content instanceof HTMLElement ? content.getBoundingClientRect().height : null,
+      headerHeight: header instanceof HTMLElement ? header.getBoundingClientRect().height : null,
+      footerHeight: footer instanceof HTMLElement ? footer.getBoundingClientRect().height : null,
+      editorPageHeight: editorPage instanceof HTMLElement ? editorPage.getBoundingClientRect().height : null,
+      leftOverflowY: leftStyle.overflowY,
+      rightOverflowY: rightStyle.overflowY,
+    };
+  });
+
+  if (layoutMetrics.documentHasVerticalOverflow || layoutMetrics.documentHasHorizontalOverflow) {
+    throw new Error(`layout overflow metrics: ${JSON.stringify(layoutMetrics)}`);
+  }
+
+  expect(layoutMetrics.leftOverflowY).toBe('auto');
+  expect(layoutMetrics.rightOverflowY).toBe('auto');
+});
+
+test('editor should apply dark theme variables to page and side panels', async ({ page }) => {
+  const templateName = `回归暗色主题-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证暗色主题可读性');
+  await page.getByRole('button', { name: '暗色' }).click();
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('button', { name: '亮色' })).toBeVisible();
+
+  const themeSnapshot = await page.evaluate(() => {
+    const root = document.documentElement;
+    const pageEl = document.querySelector('.editor-page');
+    const left = document.querySelector('.editor-main__left');
+    const right = document.querySelector('.editor-main__right');
+    if (!(pageEl instanceof HTMLElement) || !(left instanceof HTMLElement) || !(right instanceof HTMLElement)) {
+      throw new Error('未找到编辑器暗色主题检查节点');
+    }
+
+    const rootStyle = window.getComputedStyle(root);
+    return {
+      pageBg: window.getComputedStyle(pageEl).backgroundColor,
+      leftBg: window.getComputedStyle(left).backgroundColor,
+      rightBg: window.getComputedStyle(right).backgroundColor,
+      borderColor: rootStyle.getPropertyValue('--color-border').trim(),
+      textMuted: rootStyle.getPropertyValue('--tt-text-muted').trim(),
+    };
+  });
+
+  expect(themeSnapshot.pageBg).toBe('rgb(15, 19, 27)');
+  expect(themeSnapshot.leftBg).toBe('rgb(26, 34, 48)');
+  expect(themeSnapshot.rightBg).toBe('rgb(26, 34, 48)');
+  expect(themeSnapshot.borderColor).toBe('#2a3444');
+  expect(themeSnapshot.textMuted).toBe('#9ba8bc');
+});
+
+test('editor should render grouped node library with clear hierarchy', async ({ page }) => {
+  const templateName = `回归节点库层级-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证左侧步骤库层级');
+  await expect(page.getByTestId('node-group-page')).toBeVisible();
+  await expect(page.locator('[data-testid="node-group-page"] .editor-node-library__item').first()).toBeVisible();
+
+  const hierarchySnapshot = await page.evaluate(() => {
+    const groupTitle = document.querySelector('[data-testid="node-group-page"] .editor-node-library__group-title');
+    const item = document.querySelector('[data-testid="node-group-page"] .editor-node-library__item');
+    const count = document.querySelector('[data-testid="node-group-page"] .editor-node-library__group-count');
+    const iconShell = document.querySelector('[data-testid="node-group-page"] .editor-node-library__icon-shell');
+    if (!(groupTitle instanceof HTMLElement) || !(item instanceof HTMLElement) || !(count instanceof HTMLElement) || !(iconShell instanceof HTMLElement)) {
+      throw new Error('未找到节点库层级检查所需元素');
+    }
+
+    const titleStyle = window.getComputedStyle(groupTitle);
+    const itemStyle = window.getComputedStyle(item);
+    const countStyle = window.getComputedStyle(count);
+    const iconShellStyle = window.getComputedStyle(iconShell);
+
+    return {
+      titleFontWeight: titleStyle.fontWeight,
+      titleLetterSpacing: titleStyle.letterSpacing,
+      titleTextTransform: titleStyle.textTransform,
+      itemBackground: itemStyle.backgroundColor,
+      itemBorderRadius: itemStyle.borderRadius,
+      countBackground: countStyle.backgroundColor,
+      iconShellRadius: iconShellStyle.borderRadius,
+    };
+  });
+
+  expect(Number(hierarchySnapshot.titleFontWeight)).toBeGreaterThanOrEqual(700);
+  expect(hierarchySnapshot.titleLetterSpacing).not.toBe('normal');
+  expect(hierarchySnapshot.titleTextTransform).toBe('uppercase');
+  expect(hierarchySnapshot.itemBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(hierarchySnapshot.itemBorderRadius).toBe('12px');
+  expect(hierarchySnapshot.countBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(hierarchySnapshot.iconShellRadius).toBe('10px');
+});
+
 test('editor should support copy paste undo and redo for selected nodes', async ({ page }) => {
   const templateName = `回归剪贴板-${Date.now()}`;
 
@@ -245,6 +371,64 @@ test('editor should persist data-step config after save and reload', async ({ pa
   await page.locator('.react-flow__node').first().click();
   await expect(getFormInputByLabel(page, '输入变量')).toHaveValue('rawPayload');
   await expect(getFormInputByLabel(page, '输出变量')).toHaveValue('parsedPayload');
+});
+
+test('editor should persist element ref target and element order after save and reload', async ({ page }) => {
+  const templateName = `回归元素引用-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证 0.0.8 元素引用与元素顺序配置');
+
+  await dragNodeToCanvas(page, '提取数据', { x: 220, y: 140 });
+  await dragNodeToCanvas(page, '点击元素', { x: 540, y: 140 });
+
+  const nodes = page.locator('.react-flow__node');
+  await expect(nodes).toHaveCount(2);
+
+  const firstBox = await nodes.nth(0).boundingBox();
+  const secondBox = await nodes.nth(1).boundingBox();
+  if (!firstBox || !secondBox) {
+    throw new Error('无法获取 elementRef 回归用例的节点位置');
+  }
+
+  await page.mouse.move(firstBox.x + firstBox.width - 8, firstBox.y + firstBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(secondBox.x + 8, secondBox.y + secondBox.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+
+  await nodes.nth(0).click();
+  await getFormInputByLabel(page, '元素选择器').fill('.product-card');
+  await getFormInputByLabel(page, '变量名').fill('itemRef');
+  await page.locator('.ant-form-item').filter({ hasText: '提取方式' }).getByRole('combobox').click();
+  await page.getByTitle('元素引用').click();
+  await page.locator('.ant-form-item').filter({ hasText: '命中元素顺序' }).getByRole('combobox').click();
+  await page.getByTitle('固定序号').click();
+  await getFormInputByLabel(page, '元素序号').fill('2');
+
+  await nodes.nth(1).click();
+  await page.locator('.ant-form-item').filter({ hasText: '定位来源' }).locator('.ant-radio-button-wrapper', { hasText: '元素引用变量' }).click();
+  await getFormInputByLabel(page, '元素引用变量').fill('itemRef');
+  await page.locator('.ant-form-item').filter({ hasText: '命中元素顺序' }).getByRole('combobox').click();
+  await page.getByTitle('最后一个').click();
+
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible();
+
+  await page.reload();
+
+  const reloadedNodes = page.locator('.react-flow__node');
+  await expect(reloadedNodes).toHaveCount(2);
+
+  await reloadedNodes.nth(0).click();
+  await expect(getFormInputByLabel(page, '变量名')).toHaveValue('itemRef');
+  await expect(page.locator('.ant-form-item').filter({ hasText: '提取方式' })).toContainText('元素引用');
+  await expect(page.locator('.ant-form-item').filter({ hasText: '命中元素顺序' })).toContainText('固定序号');
+  await expect(getFormInputByLabel(page, '元素序号')).toHaveValue('2');
+
+  await reloadedNodes.nth(1).click();
+  await expect(page.locator('.ant-form-item').filter({ hasText: '定位来源' }).locator('.ant-radio-button-wrapper', { hasText: '元素引用变量' })).toHaveClass(/ant-radio-button-wrapper-checked/);
+  await expect(getFormInputByLabel(page, '元素引用变量')).toHaveValue('itemRef');
+  await expect(page.locator('.ant-form-item').filter({ hasText: '命中元素顺序' })).toContainText('最后一个');
 });
 
 test('editor should render paused debug panel and allow step/continue actions', async ({ page }) => {
@@ -396,6 +580,10 @@ test('editor should render paused debug panel and allow step/continue actions', 
   await expect(page.getByText('调试运行已启动，并将在首个步骤前暂停')).toBeVisible();
   await expect(page.getByText('运行监控')).toBeVisible();
   await expect(page.getByText('调试已暂停')).toBeVisible();
+  await expect(page.getByTestId('runpanel-technical-details')).toBeVisible();
+  await expect(page.getByText('技术详情')).toBeVisible();
+  await expect(page.getByText('变量检查器')).toHaveCount(0);
+  await page.locator('[data-testid="runpanel-technical-details"]').getByText('技术详情').click();
   await expect(page.getByText('变量检查器')).toBeVisible();
   await expect(page.getByText('sessionToken')).toBeVisible();
   await expect(page.getByText('accountName')).toBeVisible();
@@ -408,4 +596,32 @@ test('editor should render paused debug panel and allow step/continue actions', 
   await expect(page.getByText('调试运行已继续')).toBeVisible();
   await expect(page.locator('.ant-tag').filter({ hasText: '运行中' }).first()).toBeVisible();
   await expect(page.getByText('调试已暂停')).toHaveCount(0);
+});
+
+test('editor should expose tooltip hints for key node config fields', async ({ page }) => {
+  const templateName = `回归表单提示-${Date.now()}`;
+
+  await createBlankTemplate(page, templateName, '用于验证关键配置项提示图标');
+
+  await dragNodeToCanvas(page, '文本正则提取', { x: 220, y: 140 });
+  await dragNodeToCanvas(page, 'IF 条件', { x: 520, y: 140 });
+
+  const nodes = page.locator('.react-flow__node');
+  await expect(nodes).toHaveCount(2);
+
+  await nodes.nth(0).click();
+  await expect(page.getByTestId('field-help-textExtract-pattern')).toBeVisible();
+  await page.getByTestId('field-help-textExtract-pattern').hover();
+  await expect(page.getByRole('tooltip').last()).toContainText('JavaScript 正则表达式');
+
+  await page.getByTestId('field-help-textExtract-groupIndex').hover();
+  await expect(page.getByRole('tooltip').last()).toContainText('0 表示完整匹配');
+
+  await nodes.nth(1).click();
+  await expect(page.getByTestId('field-help-condition-left')).toBeVisible();
+  await page.getByTestId('field-help-condition-left').hover();
+  await expect(page.getByRole('tooltip').last()).toContainText('变量引用或固定文本');
+
+  await page.getByTestId('field-help-condition-op').hover();
+  await expect(page.getByRole('tooltip').last()).toContainText('exists / notExists');
 });

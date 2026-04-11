@@ -262,9 +262,10 @@ const NodeLibrary: React.FC = observer(() => {
     >
       <Flex vertical gap="middle">
         {Object.entries(groupedNodeTypes).map(([group, items]) => items.length > 0 ? (
-          <div key={group} data-testid={`node-group-${group}`}>
-            <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700, color: '#475569', letterSpacing: '0.04em' }}>
-              {groupLabels[group as NodeGroup]}
+          <div key={group} data-testid={`node-group-${group}`} className="editor-node-library__group">
+            <div className="editor-node-library__group-title">
+              <span>{groupLabels[group as NodeGroup]}</span>
+              <span className="editor-node-library__group-count">{items.length}</span>
             </div>
             <Flex vertical gap="small">
               {items.map((nodeType) => (
@@ -275,7 +276,9 @@ const NodeLibrary: React.FC = observer(() => {
                   className="editor-node-library__item"
                   style={{ '--node-color': nodeType.color } as React.CSSProperties}
                 >
-                  <span className="editor-node-library__icon">{nodeType.icon}</span>
+                  <span className="editor-node-library__icon-shell">
+                    <span className="editor-node-library__icon">{nodeType.icon}</span>
+                  </span>
                   <span className="editor-node-library__label">{nodeType.label}</span>
                 </div>
               ))}
@@ -294,6 +297,15 @@ const EditorPage: React.FC = observer(() => {
   const [searchParams] = useSearchParams();
   const templateId = searchParams.get('id');
   const [runPanelVisible, setRunPanelVisible] = React.useState(false);
+  const autoRunAttemptRef = useRef<string | null>(null);
+  const runParam = searchParams.get('run');
+  const requestedRunMode: 'normal' | 'debug' | 'debug-pause' | null = runParam === 'debug'
+    ? 'debug'
+    : runParam === 'debug-pause'
+      ? 'debug-pause'
+      : runParam
+        ? 'normal'
+        : null;
 
   // 页面关闭前提示
   useBeforeUnload(editorStore.isDirty);
@@ -393,6 +405,7 @@ const EditorPage: React.FC = observer(() => {
         previewQuality: 60,
         pauseOnStart: mode === 'debug-pause',
         breakpoints,
+        keepBrowserOnFinish: true,
       },
     } : undefined);
     if (success) {
@@ -406,6 +419,32 @@ const EditorPage: React.FC = observer(() => {
       message.error(runStore.error);
     }
   };
+
+  useEffect(() => {
+    if (!templateId || !requestedRunMode) {
+      return;
+    }
+
+    if (editorStore.loading || editorStore.templateId !== templateId || runStore.isLoading || !!runStore.currentRun) {
+      return;
+    }
+
+    const autoRunKey = `${templateId}:${requestedRunMode}`;
+    if (autoRunAttemptRef.current === autoRunKey) {
+      return;
+    }
+
+    autoRunAttemptRef.current = autoRunKey;
+
+    void (async () => {
+      await handleRunWithMode(requestedRunMode);
+
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete('run');
+      const nextQuery = nextParams.toString();
+      history.replace(nextQuery ? `/editor?${nextQuery}` : '/editor');
+    })();
+  }, [editorStore.loading, editorStore.templateId, requestedRunMode, runStore.currentRun, runStore.isLoading, searchParams, templateId]);
 
   // 取消运行
   const handleCancelRun = async () => {

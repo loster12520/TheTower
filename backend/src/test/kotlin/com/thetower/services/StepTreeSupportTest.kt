@@ -209,6 +209,156 @@ class StepTreeSupportTest {
     }
 
     @Test
+    fun `validateStepTree accepts 0_0_8 keyboard text and page steps`() {
+        validateStepTree(
+            listOf(
+                step(
+                    "keyboard-press-1",
+                    "keyboardPress",
+                    buildJsonObject {
+                        put("key", "Enter")
+                    }
+                ),
+                step(
+                    "keyboard-hotkey-1",
+                    "keyboardHotkey",
+                    buildJsonObject {
+                        put("key", "KeyP")
+                    }
+                ),
+                step(
+                    "text-extract-1",
+                    "textExtract",
+                    buildJsonObject {
+                        put("input", "订单号:123")
+                        put("pattern", "订单号:(\\d+)")
+                        put("saveAs", "orderId")
+                    }
+                ),
+                step("go-back-1", "goBack"),
+                step(
+                    "close-pages-1",
+                    "closeOtherPages",
+                    buildJsonObject {
+                        put("keep", "current")
+                    }
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `validateStepTree accepts elementRefVar with elementOrder on selector steps`() {
+        validateStepTree(
+            listOf(
+                step(
+                    "extract-ref-1",
+                    "extract",
+                    buildJsonObject {
+                        put("elementRefVar", "matchedElement")
+                        put("saveAs", "selectedElement")
+                        put("extractType", "elementRef")
+                        put(
+                            "elementOrder",
+                            buildJsonObject {
+                                put("type", "index")
+                                put("index", 1)
+                            }
+                        )
+                    }
+                ),
+                step(
+                    "click-ref-1",
+                    "click",
+                    buildJsonObject {
+                        put("elementRefVar", "selectedElement")
+                    }
+                ),
+                step(
+                    "foreach-ref-1",
+                    "forEachElement",
+                    buildJsonObject {
+                        put("elementRefVar", "matchedElement")
+                        put("itemVar", "item")
+                        put(
+                            "elementOrder",
+                            buildJsonObject {
+                                put("type", "randomRange")
+                                put("min", 0)
+                                put("max", 2)
+                            }
+                        )
+                        putJsonSteps("body", listOf(step("wait-1", "waitFor", buildJsonObject { put("waitMs", 10) })))
+                    }
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `validateStepTree rejects elementOrder index without index value`() {
+        val ex = assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "extract-ref-1",
+                        "extract",
+                        buildJsonObject {
+                            put("selector", ".item")
+                            put("saveAs", "selectedElement")
+                            put("extractType", "elementRef")
+                            put(
+                                "elementOrder",
+                                buildJsonObject {
+                                    put("type", "index")
+                                }
+                            )
+                        }
+                    )
+                )
+            )
+        }
+
+        assertTrue(ex.message!!.contains("elementOrder.index"))
+    }
+
+    @Test
+    fun `validateStepTree rejects closeOtherPages alias without pageAlias`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "close-pages-1",
+                        "closeOtherPages",
+                        buildJsonObject {
+                            put("keep", "alias")
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree accepts type based elementOrder`() {
+        validateStepTree(
+            listOf(
+                step(
+                    "click-1",
+                    "click",
+                    buildJsonObject {
+                        put("elementRefVar", "buttons")
+                        put("elementOrder", buildJsonObject {
+                            put("type", "index")
+                            put("index", 1)
+                        })
+                    }
+                )
+            )
+        )
+    }
+
+    @Test
     fun `extractReferencedWorkflowIds collects nested callWorkflow nodes`() {
         val references = extractReferencedWorkflowIds(
             listOf(
