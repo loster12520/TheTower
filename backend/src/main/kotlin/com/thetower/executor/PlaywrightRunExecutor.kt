@@ -7,6 +7,23 @@ import com.microsoft.playwright.PlaywrightException
 import com.thetower.models.RunDebugOptions
 import com.thetower.utils.RunExecutionException
 
+internal data class ResolvedBrowserTarget(
+    val engine: String,
+    val channel: String? = null
+)
+
+internal fun resolveBrowserTarget(browserName: String): ResolvedBrowserTarget {
+    val normalized = browserName.trim().lowercase()
+    return when (normalized) {
+        "chromium" -> ResolvedBrowserTarget(engine = "chromium")
+        "chrome" -> ResolvedBrowserTarget(engine = "chromium", channel = "chrome")
+        "edge", "msedge" -> ResolvedBrowserTarget(engine = "chromium", channel = "msedge")
+        "firefox" -> ResolvedBrowserTarget(engine = "firefox")
+        "webkit" -> ResolvedBrowserTarget(engine = "webkit")
+        else -> throw RunExecutionException("不支持的浏览器类型: $browserName")
+    }
+}
+
 class OpenedPlaywrightRunSession(
     private val playwright: Playwright,
     private val browser: Browser,
@@ -67,21 +84,23 @@ class PlaywrightRunExecutor(
     }
 
     private fun launchBrowser(playwright: Playwright, debugOptions: RunDebugOptions?): Browser {
+        val target = resolveBrowserTarget(config.browser)
         val enableDebug = debugOptions?.enabled == true
         val useVisibleBrowser = enableDebug && (debugOptions.openVisibleBrowser || debugOptions.openDevtools)
         val options = BrowserType.LaunchOptions().setHeadless(if (useVisibleBrowser) false else config.headless)
+        target.channel?.let { options.setChannel(it) }
 
         if (debugOptions?.openDevtools == true) {
-            if (config.browser.lowercase() !in setOf("chromium", "chrome")) {
-                throw RunExecutionException("只有 Chromium/Chrome 调试运行支持自动打开 DevTools")
+            if (target.engine != "chromium") {
+                throw RunExecutionException("只有 Chromium 内核浏览器调试运行支持自动打开 DevTools")
             }
             options.setDevtools(true)
         }
 
-        return when (config.browser.lowercase()) {
-            "chromium", "chrome" -> playwright.chromium().launch(options)
+        return when (target.engine) {
+            "chromium" -> playwright.chromium().launch(options)
             "firefox" -> playwright.firefox().launch(options)
-            "webkit", "edge" -> playwright.webkit().launch(options)
+            "webkit" -> playwright.webkit().launch(options)
             else -> throw RunExecutionException("不支持的浏览器类型: ${config.browser}")
         }
     }

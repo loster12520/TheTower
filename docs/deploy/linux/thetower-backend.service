@@ -1,0 +1,16 @@
+[Unit]
+Description=TheTower Backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/thetower
+EnvironmentFile=/opt/thetower/backend/thetower.env
+ExecStart=/opt/thetower/backend/start-backend.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/thetower/data/logs/backend.log
+StandardError=append:/opt/thetower/data/logs/backend-error.log
+
+[Install]
+WantedBy=multi-user.target

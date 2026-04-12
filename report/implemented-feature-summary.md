@@ -1,329 +1,129 @@
 # TheTower 已实现功能汇总
 
-## 项目概述
+> 导语：本文档用于汇总 TheTower 截至 0.0.9 的实际已实现能力与已完成验证，便于和版本计划、测试报告以及未完成清单保持统一口径。
 
-TheTower 是一个浏览器 RPA（机器人流程自动化）工作流编排与执行系统，采用前后端分离架构，支持可视化工作流设计、实时调试与执行监控。
+## 1. 基线口径
 
-- **前端**：React + TypeScript + Umi + MobX + Ant Design + React Flow
-- **后端**：Kotlin + Ktor + Playwright + SQLite + Jimmer
-- **通信**：REST API + WebSocket 实时事件流
+| 项目 | 当前状态 |
+|---|---|
+| 当前稳定版本 | 0.0.9 |
+| 默认模板版本 | 0.0.8 |
+| 导入兼容版本 | 0.0.1、0.0.4、0.0.5、0.0.6、0.0.7、0.0.8 |
+| 前端 mock 回归 | 28/28 通过 |
+| 前端真实联调 | 17/17 通过 |
+| 后端单测与黑盒 | 通过 |
 
----
+## 2. 模板与编排能力
 
-## 1. 模板管理功能
+### 2.1 模板管理
 
-### 1.1 模板 CRUD
-- 创建模板（名称、描述）
-- 查询模板列表（支持包含上次运行状态）
-- 获取单个模板详情
-- 更新模板元数据（重命名、修改描述）
-- 删除模板
-- 模板导入/导出（JSON 格式，支持 0.0.1 ~ 0.0.7 版本兼容）
+- 创建模板、重命名、修改描述、删除模板。
+- 模板列表支持显示 `schemaVersion`、节点统计与上次运行状态。
+- 导入导出 JSON 模板，支持多版本兼容。
+- 保存主流程步骤与 `otherStep` 画布残留节点。
 
-### 1.2 模板版本管理
-- Schema 版本控制（当前默认 0.0.7）
-- 多版本模板并行兼容
-- 自动版本迁移支持
+### 2.2 编辑器能力
 
----
+- React Flow 可视化画布编排。
+- 节点拖拽、自动连线、删除与重排。
+- 复制、剪切、粘贴、撤销、重做。
+- MiniMap、缩放和平移。
+- 左侧步骤库分组与层级优化已完成。
+- 编辑页无页面级总滚动条，左右栏独立滚动。
+- 暗色主题与亮色主题均可用。
 
-## 2. 工作流编排功能
+### 2.3 容器与子流程
 
-### 2.1 画布编辑器
-- 可视化节点拖拽编排
-- 节点自动连线（拖拽靠近时自动连接）
-- 节点复制/剪切/粘贴（支持快捷键 Ctrl+C/X/V）
-- 撤销/重做（支持快捷键 Ctrl+Z/Y）
-- 画布平移、缩放、MiniMap 导航
+- `if` 支持 `THEN / ELSE` 子流程。
+- `forTimes`、`while`、`forEachElement`、`forEachData`、`startBrowser` 支持 BODY 子流程。
+- 容器节点支持嵌套编辑、缩略预览、分支状态聚合与失败态展示。
+- `callWorkflow` 支持调用子流程模板。
 
-### 2.2 节点类型（共 38 种）
+## 3. 节点能力矩阵
 
-#### 页面操作节点（13 种）
-| 节点 | 功能 |
-|------|------|
-| openUrl | 打开网页 URL |
-| click | 点击元素（支持单击/双击、左/中/右键） |
-| type | 输入文本（支持固定文本/变量/随机/顺序/随机数字） |
-| newPage | 新建标签页 |
-| closePage | 关闭标签页 |
-| switchPage | 切换标签页（按别名/标题/URL 匹配） |
-| reloadPage | 刷新页面 |
-| screenshotPage | 页面截图（PNG/JPEG，支持整页） |
-| hover | 悬停元素 |
-| focus | 聚焦元素 |
-| selectOption | 选择下拉选项 |
-| scrollPage | 滚动页面（位置/像素模式） |
-| uploadFiles | 上传文件（本地文件/URL 下载） |
+当前节点注册表共 39 个节点。
 
-#### 等待节点（2 种）
-| 节点 | 功能 |
-|------|------|
-| waitFor | 等待元素出现或固定时间 |
-| waitForResponse | 等待网络响应 |
+| 分组 | 数量 | 已实现节点 |
+|---|---:|---|
+| 页面操作 | 17 | `openUrl`、`click`、`type`、`keyboardPress`、`keyboardHotkey`、`goBack`、`closeOtherPages`、`newPage`、`closePage`、`switchPage`、`reloadPage`、`screenshotPage`、`hover`、`focus`、`selectOption`、`scrollPage`、`uploadFiles` |
+| 等待 | 2 | `waitFor`、`waitForResponse` |
+| 数据处理 | 12 | `extract`、`textExtract`、`executeJs`、`getUrl`、`downloadFile`、`importText`、`totp`、`getCookies`、`clearCookies`、`convertJson`、`extractKey`、`randomGet` |
+| 流程控制 | 8 | `if`、`forTimes`、`while`、`break`、`forEachElement`、`forEachData`、`startBrowser`、`callWorkflow` |
 
-#### 数据操作节点（11 种）
-| 节点 | 功能 |
-|------|------|
-| extract | 提取元素数据（文本/属性/HTML/源码等） |
-| executeJs | 执行 JavaScript |
-| getUrl | 获取当前 URL |
-| downloadFile | 下载文件 |
-| importText | 导入文本文件 |
-| totp | 生成 TOTP 验证码 |
-| getCookies | 获取 Cookies |
-| clearCookies | 清空 Cookies |
-| convertJson | JSON 转换（字符串/对象互转） |
-| extractKey | 提取对象键值 |
-| randomGet | 随机取数组元素 |
+### 3.1 节点配置与校验
 
-#### 流程控制节点（10 种）
-| 节点 | 功能 |
-|------|------|
-| if | 条件分支（THEN/ELSE 子流程） |
-| forTimes | For 循环（指定次数） |
-| while | While 循环（条件判断，支持最大迭代限制） |
-| break | 退出循环（仅允许在循环 BODY 内使用） |
-| forEachElement | 遍历元素集合 |
-| forEachData | 遍历数据变量 |
-| startBrowser | 浏览器上下文（独立上下文隔离） |
-| closeBrowser | 关闭浏览器上下文 |
-| callWorkflow | 调用子流程/其他模板 |
-| importText | 导入文本作为变量 |
+- 高风险字段已补齐提示图标与说明文本。
+- 选择器类步骤支持统一的元素目标配置。
+- `extract`、`click` 等步骤已支持 `elementRefVar + elementOrder`。
+- 运行前会校验画布结构、循环体规则、条件体完整性与关键字段合法性。
 
-### 2.3 容器节点与子流程
-- 容器节点支持嵌套子流程（THEN/ELSE/BODY 分支）
-- 子流程可视化编辑（独立画布工作台）
-- 子流程缩略预览（显示前 3 个步骤标签）
-- 分支状态聚合显示（执行中/成功/失败）
-- 支持多层嵌套（主流程 → 容器 → 子容器）
+## 4. 执行与调试能力
 
-### 2.4 节点配置
-- 属性面板表单配置
-- 支持断点设置（调试时暂停）
-- 变量引用语法 `${variableName}`
-- 字段校验与错误提示
+### 4.1 运行控制
 
----
+- 启动运行、取消运行、重启运行、删除运行。
+- 支持普通运行与调试运行。
+- 首页模板卡片可直接跳转编辑页并自动启动运行。
 
-## 3. 运行执行功能
+### 4.2 调试工作台
 
-### 3.1 运行生命周期
-- 启动运行（普通模式/调试模式）
-- 运行取消
-- 运行重启
-- 运行删除
-- 运行列表查询（支持按模板、状态、时间范围筛选）
+- 断点暂停。
+- 继续执行。
+- 单步执行。
+- 打开宿主机浏览器调试窗口。
+- 近实时调试预览与全屏预览。
+- 调试上下文、变量检查器与当前路径展示。
 
-### 3.2 执行器能力
-- Playwright 浏览器自动化
-- 步骤递归执行（支持嵌套子流程）
-- 变量上下文传递
-- 页面上下文管理（多标签页）
-- 浏览器上下文隔离
+### 4.3 运行面板
 
-### 3.3 执行校验
-- 步骤树结构校验
-- THEN/BODY 必填校验
-- break 节点位置校验（仅允许在循环体内）
-- while 最大迭代次数校验
-- 运行前画布完整性校验
+- 默认只展示核心状态、调试预览与输出摘要。
+- 变量、产物、步骤、日志与事件流已收纳进“技术详情”折叠区。
+- 支持显示可读步骤名，而不是仅显示内部步骤 ID。
+- 支持失败节点定位。
 
----
+## 5. 后端服务能力
 
-## 4. 实时调试功能
+### 5.1 REST API
 
-### 4.1 调试模式
-- 普通运行（无调试）
-- 调试运行（带实时预览）
-- 启动即暂停（在首个步骤前暂停）
+- 模板接口：列表、创建、详情、更新元数据、保存步骤、删除。
+- 运行接口：启动、列表、详情、取消、重启、删除。
+- 调试接口：打开浏览器、拉取上下文、继续、单步、关闭。
+- 健康检查接口：`GET /api/v1/health`。
 
-### 4.2 调试控制能力
-- 继续执行
-- 单步执行
-- 断点命中暂停
-- 打开宿主机浏览器调试窗口
-- 关闭调试预览
+### 5.2 WebSocket 事件
 
-### 4.3 调试预览
-- 近实时浏览器画面预览（Base64 图片流）
-- FPS 和质量可配置
-- 全屏预览模式
-- 页面尺寸显示
+- 运行事件：开始、步骤开始、步骤成功、步骤失败、日志、结束、取消。
+- 调试事件：会话启动、状态变更、断点命中、预览帧、上下文更新、继续、单步、关闭、错误。
 
-### 4.4 调试上下文
-- 当前步骤路径显示
-- 页面别名和上下文 ID
-- 变量检查器（变量名值对）
-- 更新时间戳
+### 5.3 数据持久化
 
----
+- SQLite 持久化模板与运行记录。
+- `data/runs/` 落运行产物。
+- 后端已支持按模板、状态、时间范围查询运行记录。
 
-## 5. 运行监控功能
+## 6. 0.0.8 收口新增点
 
-### 5.1 WebSocket 事件流
-- RUN_STARTED - 运行开始
-- STEP_STARTED - 步骤开始
-- STEP_SUCCEEDED - 步骤成功
-- STEP_FAILED - 步骤失败
-- LOG - 日志输出
-- RUN_SUCCEEDED - 运行成功
-- RUN_FAILED - 运行失败
-- RUN_CANCELED - 运行取消
-- DEBUG_SESSION_STARTED - 调试会话启动
-- DEBUG_FRAME - 调试画面帧
-- DEBUG_STATUS_CHANGED - 调试状态变更
-- DEBUG_BREAKPOINT_HIT - 命中断点
-- DEBUG_CONTEXT_UPDATED - 调试上下文更新
-- DEBUG_RESUMED - 调试继续
-- DEBUG_STEPPED - 调试单步
-- DEBUG_SESSION_CLOSED - 调试会话关闭
-- DEBUG_ERROR - 调试错误
+0.0.8 在已有 0.0.7 基础上，重点补完了高频缺口与体验收口。
 
-### 5.2 运行面板
-- 运行状态实时监控
-- 当前步骤路径显示
-- 步骤执行状态列表（待执行/执行中/成功/失败）
-- 运行日志（带时间戳和级别）
-- 变量输出摘要
-- 产物文件列表
-- 事件流时间线
-- 失败节点一键定位
+- 新增并闭环 `keyboardPress`、`keyboardHotkey`、`textExtract`、`goBack`、`closeOtherPages`。
+- 完成 `elementRefVar + elementOrder` 统一解析与前端表单支持。
+- 完成 RunPanel 默认降噪与技术详情折叠。
+- 完成左侧步骤库层次优化与 NodeConfigPanel 提示体系。
+- 完成编辑页无总滚动条与暗色主题验收回归。
 
-### 5.3 节点状态可视化
-- 节点执行状态边框高亮
-- 容器节点嵌套状态聚合
-- 当前执行路径高亮
-- 断点标记显示
-- 暂停状态指示器
+## 7. 测试与验收基线
 
----
+| 类别 | 当前结论 |
+|---|---|
+| 前端构建 | 通过 |
+| 前端 mock 回归 | 28/28 通过 |
+| 前端真实联调 | 17/17 通过 |
+| 后端单测 | 通过 |
+| 后端 API / WS 脚本 | 通过 |
+| 0.0.8 体验类验收 | 已闭环 |
 
-## 6. 数据持久化
+## 8. 当前结论
 
-### 6.1 存储
-- SQLite 数据库存储
-- Jimmer ORM 框架
-- 模板数据持久化
-- 运行记录持久化
-- 运行输出和产物存储
+当前系统已经完成“可编排、可保存、可执行、可调试、可定位失败、可回归验证”的主链路闭环。0.0.9 已进一步补齐专项指标、部署说明、用户文档和 API 文档，并形成版本总结与测试证据。
 
-### 6.2 数据库迁移
-- Flyway 迁移脚本
-- V1 - 初始表结构
-- V2 - 索引优化
-- V3 - 运行表确保
-- V4 - 输出和产物字段
-
----
-
-## 7. API 接口
-
-### 7.1 模板接口
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | /api/v1/templates | 模板列表 |
-| POST | /api/v1/templates | 创建模板 |
-| GET | /api/v1/templates/{id} | 模板详情 |
-| PATCH | /api/v1/templates/{id} | 更新元数据 |
-| PUT | /api/v1/templates/{id} | 保存步骤 |
-| DELETE | /api/v1/templates/{id} | 删除模板 |
-
-### 7.2 运行接口
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /api/v1/runs | 启动运行 |
-| GET | /api/v1/runs | 运行列表 |
-| GET | /api/v1/runs/{id} | 运行详情 |
-| POST | /api/v1/runs/{id}/cancel | 取消运行 |
-| POST | /api/v1/runs/{id}/restart | 重启运行 |
-| DELETE | /api/v1/runs/{id} | 删除运行 |
-
-### 7.3 调试接口
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /api/v1/runs/{id}/debug/open-browser | 打开调试浏览器 |
-| GET | /api/v1/runs/{id}/debug/context | 获取调试上下文 |
-| POST | /api/v1/runs/{id}/debug/continue | 继续调试 |
-| POST | /api/v1/runs/{id}/debug/step | 单步调试 |
-| POST | /api/v1/runs/{id}/debug/close | 关闭调试 |
-
-### 7.4 WebSocket
-| 路径 | 说明 |
-|------|------|
-| /ws/v1/runs/{runId} | 运行事件流 |
-
----
-
-## 8. 前端基础设施
-
-### 8.1 状态管理
-- MobX 响应式状态管理
-- editorStore - 编辑器状态
-- runStore - 运行状态
-- templateStore - 模板列表状态
-- uiStore - UI 状态
-- healthStore - 健康检查
-
-### 8.2 网络通信
-- Axios HTTP 客户端
-- WebSocket 工厂（支持自动重连）
-- 统一 API 层封装
-
-### 8.3 编辑器基础设施
-- React Flow 画布引擎
-- 节点类型注册系统
-- 步骤注册表（NODE_DEFINITIONS）
-- 画布转换器（steps ↔ nodes/edges）
-- 验证器
-
-### 8.4 用户体验
-- 快捷键支持（Ctrl+S 保存、Ctrl+C/X/V 复制粘贴、Ctrl+Z/Y 撤销重做）
-- 页面关闭前未保存提示
-- 加载状态指示
-- 错误提示与处理
-
----
-
-## 9. 测试覆盖
-
-### 9.1 后端测试
-- TemplateServiceTest - 模板服务单元测试
-- StepTreeSupportTest - 步骤树支持测试
-- DebugExecutionGateTest - 调试执行门控测试
-- RunRepositoryTest - 运行仓库测试
-
-### 9.2 前端测试
-- smoke.spec.ts - 冒烟测试
-- import-export.spec.ts - 导入导出测试
-- regression.spec.ts - 回归测试
-- real-backend.spec.ts - 真实后端联调测试
-
-### 9.3 测试脚本
-- api-smoke-test.ps1 - API 冒烟测试
-- ws-event-test.ps1 - WebSocket 事件测试
-
----
-
-## 10. 版本演进
-
-| 版本 | 主要功能 |
-|------|----------|
-| 0.0.1 | 基础节点、线性流程、模板 CRUD |
-| 0.0.2 | 运行执行、Playwright 执行器 |
-| 0.0.3 | WebSocket 实时事件流 |
-| 0.0.4 | 控制流节点（if/forTimes/while/break）、子流程 |
-| 0.0.5 | 调试模式、实时预览、断点 |
-| 0.0.6 | 调试控制（继续/单步）、变量检查器 |
-| 0.0.7 | 浏览器上下文、子流程调用、数据操作节点增强 |
-
----
-
-## 11. 当前状态总结
-
-TheTower 已形成完整的"编排-执行-观测-调试"闭环：
-
-1. **可视化编排**：38 种节点、容器嵌套、子流程编辑
-2. **灵活执行**：普通运行、调试运行、条件分支、循环控制
-3. **实时监控**：WebSocket 事件流、步骤状态、运行日志
-4. **深度调试**：实时画面预览、断点暂停、单步执行、变量检查
-5. **工程完备**：前后端测试覆盖、多版本兼容、数据持久化
+总结：截至 0.0.9，TheTower 的实际状态应定义为“功能闭环与工程化交付证据均已形成”，而不是“仍停留在 0.0.8 的功能基线描述”。
