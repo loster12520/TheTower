@@ -623,6 +623,16 @@ function validateSchemaStep(step: Step): ValidationError[] {
       return validateSimpleRequired(step, ['javascript']);
     case 'waitForResponse':
       return validateSimpleRequired(step, ['responseUrl']);
+    case 'listenRequestTrigger':
+      return validateSimpleRequired(step, ['listenerId', 'urlPattern']);
+    case 'listenRequestResult':
+      return validateSimpleRequired(step, ['listenerId', 'saveAs']);
+    case 'stopPageListen': {
+      if (config.stopAll === true) {
+        return [];
+      }
+      return validateSimpleRequired(step, ['listenerId']);
+    }
     case 'getUrl': {
       const errors = validateSimpleRequired(step, ['saveAs']);
       if (config.extract === 'queryParam' && (!config.paramName || String(config.paramName).trim().length === 0)) {
@@ -840,9 +850,17 @@ function validateStep(step: Step, context: ValidationContext): ValidationError[]
     case 'uploadFiles':
     case 'executeJs':
     case 'waitForResponse':
+    case 'listenRequestTrigger':
+    case 'listenRequestResult':
+    case 'stopPageListen':
     case 'getUrl':
     case 'downloadFile':
     case 'importText':
+    case 'saveData':
+    case 'saveExcel':
+    case 'importExcel':
+    case 'extractActiveElement':
+    case 'getClipboardText':
     case 'totp':
     case 'getCookies':
     case 'clearCookies':

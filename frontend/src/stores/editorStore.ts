@@ -1,6 +1,8 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import type { Node, Edge, Connection, XYPosition } from '@xyflow/react';
 import { templateApi } from '@/services/api';
+import { autoLayoutGraph } from '@/utils/autoLayout';
+import { summarizeCanvasDiff } from '@/utils/collaborationDiff';
 import { graphToSteps, stepsToGraph, createNode as createNewNode, generateId } from '@/utils/canvasConverter';
 import { validateCanvas } from '@/utils/validator';
 import { NODE_DEFINITIONS } from '@/models/stepRegistry';
@@ -93,6 +95,8 @@ class EditorStore {
   edges: Edge[] = [];
   rootNodes: Node[] = [];
   rootEdges: Edge[] = [];
+  persistedRootNodes: Node[] = [];
+  persistedRootEdges: Edge[] = [];
   selectedNode: Node | null = null;
   activeSubflow: ActiveSubflow | null = null;
   subflowGraphMap: Record<string, Partial<Record<BranchType, FlowGraph>>> = {};
@@ -107,6 +111,11 @@ class EditorStore {
   saving = false;
   isDirty = false;
   error: string | null = null;
+  lastSavedAt: string | null = null;
+  lastSaveError: string | null = null;
+  lastSaveOrigin: 'manual' | 'auto' | null = null;
+  changeVersion = 0;
+  lastPersistedChangeVersion = 0;
 
   // 编辑器体验增强
   clipboard: ClipboardGraph | null = null;
@@ -204,10 +213,53 @@ class EditorStore {
     return this.selectedNode?.data?.config?.breakpoint === true;
   }
 
+  get saveStatusLabel() {
+    if (this.saving) {
+      return this.lastSaveOrigin === 'auto' ? '自动保存中...' : '保存中...';
+    }
+
+    if (this.lastSaveError) {
+      return '保存失败';
+    }
+
+    if (this.isDirty) {
+      return '未保存';
+    }
+
+    if (this.lastSavedAt) {
+      const date = new Date(this.lastSavedAt);
+      return `已保存 ${date.toLocaleTimeString()}`;
+    }
+
+    return '未修改';
+  }
+
   get debugBreakpoints(): string[] {
     this.syncCurrentCanvas(false);
     const { steps } = graphToSteps(this.rootNodes, this.rootEdges);
     return collectBreakpointStepIds(steps);
+  }
+
+  get localChangeSummary() {
+    return summarizeCanvasDiff(this.persistedRootNodes, this.persistedRootEdges, this.rootNodes, this.rootEdges);
+  }
+
+  focusRootNode(nodeId: string): boolean {
+    this.syncCurrentCanvas(false);
+    const rootNode = this.rootNodes.find((node) => node.id === nodeId) || null;
+    if (!rootNode) {
+      return false;
+    }
+
+    runInAction(() => {
+      this.activeSubflow = null;
+      this.nodes = cloneNodes(this.rootNodes);
+      this.edges = cloneEdges(this.rootEdges);
+      this.selectedNode = this.nodes.find((node) => node.id === nodeId) || rootNode;
+      this.error = null;
+    });
+
+    return true;
   }
 
   // ========== 数据加载 ==========
@@ -230,12 +282,19 @@ class EditorStore {
         const { nodes, edges } = stepsToGraph(template.steps, template.otherStep);
         this.rootNodes = cloneNodes(nodes);
         this.rootEdges = cloneEdges(edges);
+        this.persistedRootNodes = cloneNodes(nodes);
+        this.persistedRootEdges = cloneEdges(edges);
         this.nodes = cloneNodes(nodes);
         this.edges = cloneEdges(edges);
         this.activeSubflow = null;
         this.subflowGraphMap = {};
         this.selectedNode = null;
         this.isDirty = false;
+        this.lastSavedAt = template.updatedAt || null;
+        this.lastSaveError = null;
+        this.lastSaveOrigin = null;
+        this.changeVersion = 0;
+        this.lastPersistedChangeVersion = 0;
         this.clipboard = null;
         this.pastSnapshots = [];
         this.futureSnapshots = [];
@@ -252,7 +311,7 @@ class EditorStore {
   }
 
   // 保存模板
-  async saveTemplate(): Promise<boolean> {
+  async saveTemplate(origin: 'manual' | 'auto' = 'manual'): Promise<boolean> {
     if (!this.templateId) return false;
 
     this.syncCurrentCanvas(false);
@@ -264,27 +323,52 @@ class EditorStore {
       return false;
     }
 
+    const saveVersion = this.changeVersion;
+    const persistedNodes = cloneNodes(this.rootNodes);
+    const persistedEdges = cloneEdges(this.rootEdges);
     this.setSaving(true);
+    this.lastSaveOrigin = origin;
+    this.lastSaveError = null;
 
     try {
-      await templateApi.saveSteps(this.templateId, {
+      const response = await templateApi.saveSteps(this.templateId, {
         schemaVersion: '0.0.8',
         steps: steps as Step[],
         otherStep
       });
 
       runInAction(() => {
-        this.isDirty = false;
+        this.lastPersistedChangeVersion = Math.max(this.lastPersistedChangeVersion, saveVersion);
+        this.isDirty = this.changeVersion > saveVersion;
+        this.lastSavedAt = response.data.updatedAt;
+        this.persistedRootNodes = persistedNodes;
+        this.persistedRootEdges = persistedEdges;
+        this.lastSaveError = null;
       });
 
       return true;
     } catch (error) {
       const apiError = error as ApiError;
-      this.setError(apiError.message || '保存模板失败');
+      const message = apiError.message || '保存模板失败';
+      this.setError(message);
+      this.lastSaveError = message;
       return false;
     } finally {
       this.setSaving(false);
     }
+  }
+
+  autoLayoutCurrentCanvas() {
+    this.captureSnapshot();
+    const result = autoLayoutGraph(this.nodes, this.edges);
+    runInAction(() => {
+      this.nodes = result.nodes;
+      this.edges = result.edges;
+      this.syncCurrentCanvas(false);
+      this.isDirty = true;
+      this.error = null;
+    });
+    return true;
   }
 
   // ========== 节点操作 ==========
@@ -306,7 +390,7 @@ class EditorStore {
       this.nodes = [...this.nodes, newNode];
       this.syncCurrentCanvas(false);
       this.selectedNode = newNode;
-      this.isDirty = true;
+      this.markCanvasChanged();
     });
 
     return newNode;
@@ -325,7 +409,7 @@ class EditorStore {
         };
         this.nodes = nextNodes;
         this.syncCurrentCanvas(false);
-        this.isDirty = true;
+        this.markCanvasChanged();
       }
     });
   }
@@ -342,7 +426,7 @@ class EditorStore {
       }
       
       this.syncCurrentCanvas(false);
-      this.isDirty = true;
+      this.markCanvasChanged();
     });
   }
 
@@ -364,9 +448,123 @@ class EditorStore {
         };
         this.nodes = nextNodes;
         this.syncCurrentCanvas(false);
-        this.isDirty = true;
+        this.markCanvasChanged();
       }
     });
+  }
+
+  applyRemoteRootNode(remoteNode: Node, connectedEdges: Edge[]): boolean {
+    this.captureSnapshot();
+
+    const normalizedNode = cloneNodes([remoteNode])[0];
+    const nextRootNodes = cloneNodes(this.rootNodes.filter((node) => node.id !== remoteNode.id));
+    nextRootNodes.push(normalizedNode);
+
+    const availableNodeIds = new Set(nextRootNodes.map((node) => node.id));
+    const nextRootEdges = cloneEdges(
+      this.rootEdges.filter((edge) => edge.source !== remoteNode.id && edge.target !== remoteNode.id),
+    );
+
+    cloneEdges(connectedEdges)
+      .filter((edge) => availableNodeIds.has(edge.source) && availableNodeIds.has(edge.target))
+      .forEach((edge) => {
+        const duplicateIndex = nextRootEdges.findIndex(
+          (existingEdge) => existingEdge.id === edge.id || (existingEdge.source === edge.source && existingEdge.target === edge.target),
+        );
+        if (duplicateIndex !== -1) {
+          nextRootEdges.splice(duplicateIndex, 1);
+        }
+        nextRootEdges.push(edge);
+      });
+
+    runInAction(() => {
+      this.activeSubflow = null;
+      this.rootNodes = nextRootNodes;
+      this.rootEdges = nextRootEdges;
+      this.nodes = cloneNodes(nextRootNodes);
+      this.edges = cloneEdges(nextRootEdges);
+      this.selectedNode = this.nodes.find((node) => node.id === remoteNode.id) || null;
+      this.error = null;
+      this.markCanvasChanged();
+    });
+
+    return true;
+  }
+
+  applyRemoteRootNodeRemoval(nodeId: string): boolean {
+    const existingNode = this.rootNodes.find((node) => node.id === nodeId) || null;
+    if (!existingNode) {
+      return false;
+    }
+
+    this.captureSnapshot();
+
+    runInAction(() => {
+      const nextRootNodes = cloneNodes(this.rootNodes.filter((node) => node.id !== nodeId));
+      const nextRootEdges = cloneEdges(this.rootEdges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
+
+      this.activeSubflow = null;
+      this.rootNodes = nextRootNodes;
+      this.rootEdges = nextRootEdges;
+      this.nodes = cloneNodes(nextRootNodes);
+      this.edges = cloneEdges(nextRootEdges);
+      this.selectedNode = null;
+      this.error = null;
+      this.markCanvasChanged();
+    });
+
+    return true;
+  }
+
+  applyRemoteRootEdge(remoteEdge: Edge): boolean {
+    const sourceNode = this.rootNodes.find((node) => node.id === remoteEdge.source) || null;
+    const targetNode = this.rootNodes.find((node) => node.id === remoteEdge.target) || null;
+    if (!sourceNode || !targetNode) {
+      return false;
+    }
+
+    this.captureSnapshot();
+
+    runInAction(() => {
+      const normalizedEdge = cloneEdges([remoteEdge])[0];
+      const nextRootEdges = cloneEdges(
+        this.rootEdges.filter(
+          (edge) => edge.id !== remoteEdge.id && !(edge.source === remoteEdge.source && edge.target === remoteEdge.target),
+        ),
+      );
+      nextRootEdges.push(normalizedEdge);
+
+      this.activeSubflow = null;
+      this.rootEdges = nextRootEdges;
+      this.nodes = cloneNodes(this.rootNodes);
+      this.edges = cloneEdges(nextRootEdges);
+      this.error = null;
+      this.markCanvasChanged();
+    });
+
+    return true;
+  }
+
+  applyRemoteRootEdgeRemoval(edgeId: string): boolean {
+    const existingEdge = this.rootEdges.find((edge) => edge.id === edgeId) || null;
+    if (!existingEdge) {
+      return false;
+    }
+
+    this.captureSnapshot();
+
+    runInAction(() => {
+      const nextRootEdges = cloneEdges(this.rootEdges.filter((edge) => edge.id !== edgeId));
+
+      this.activeSubflow = null;
+      this.rootEdges = nextRootEdges;
+      this.nodes = cloneNodes(this.rootNodes);
+      this.edges = cloneEdges(nextRootEdges);
+      this.error = null;
+      this.markCanvasChanged();
+    });
+
+    return true;
   }
 
   // ========== 连线操作 ==========
@@ -415,7 +613,7 @@ class EditorStore {
       };
       this.edges = [...this.edges, newEdge];
       this.syncCurrentCanvas(false);
-      this.isDirty = true;
+      this.markCanvasChanged();
       if (!silent) {
         this.error = null;
       }
@@ -430,7 +628,7 @@ class EditorStore {
     runInAction(() => {
       this.edges = this.edges.filter(e => e.id !== edgeId);
       this.syncCurrentCanvas(false);
-      this.isDirty = true;
+      this.markCanvasChanged();
     });
   }
 
@@ -442,7 +640,7 @@ class EditorStore {
     this.nodes = cloneNodes(nodes);
     this.edges = cloneEdges(edges);
     this.syncCurrentCanvas(false);
-    this.isDirty = true;
+    this.markCanvasChanged();
   }
 
   // 清空画布
@@ -452,7 +650,7 @@ class EditorStore {
     this.edges = [];
     this.selectedNode = null;
     this.syncCurrentCanvas(false);
-    this.isDirty = true;
+    this.markCanvasChanged();
   }
 
   copySelection(): boolean {
@@ -516,7 +714,7 @@ class EditorStore {
       this.edges = [...this.edges, ...pastedEdges];
       this.selectedNode = pastedNodes[pastedNodes.length - 1] || null;
       this.syncCurrentCanvas(false);
-      this.isDirty = true;
+      this.markCanvasChanged();
       this.error = null;
     });
 
@@ -699,11 +897,16 @@ class EditorStore {
     this.isDirty = dirty;
   }
 
+  private markCanvasChanged() {
+    this.changeVersion += 1;
+    this.isDirty = true;
+  }
+
   private syncCurrentCanvas(markDirty: boolean) {
     if (!this.activeSubflow) {
       this.rootNodes = cloneNodes(this.nodes);
       this.rootEdges = cloneEdges(this.edges);
-      if (markDirty) this.isDirty = true;
+      if (markDirty) this.markCanvasChanged();
       return;
     }
 
@@ -737,7 +940,7 @@ class EditorStore {
       }
     }
 
-    if (markDirty) this.isDirty = true;
+    if (markDirty) this.markCanvasChanged();
   }
 
   private getOrCreateSubflowGraph(nodeId: string, branch: BranchType, rootNode: Node): FlowGraph {
@@ -804,7 +1007,7 @@ class EditorStore {
           || this.rootNodes.find((node) => node.id === snapshot.selectedNodeId)
           || null
         : null;
-      this.isDirty = true;
+      this.markCanvasChanged();
       this.error = null;
     });
   }

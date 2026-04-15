@@ -5,6 +5,7 @@ import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Playwright
 import com.microsoft.playwright.PlaywrightException
 import com.thetower.models.RunDebugOptions
+import com.thetower.models.RunLaunchOptions
 import com.thetower.utils.RunExecutionException
 
 internal data class ResolvedBrowserTarget(
@@ -39,6 +40,10 @@ class OpenedPlaywrightRunSession(
 
     fun capturePreviewFrame(quality: Int) = session.capturePreviewFrame(quality)
 
+    fun debugClickAt(x: Int, y: Int) = session.debugClickAt(x, y)
+
+    fun debugTypeText(text: String, clearBeforeType: Boolean) = session.debugTypeText(text, clearBeforeType)
+
     fun executeStep(step: com.thetower.models.StepNode, outputs: MutableMap<String, String>) = session.executeStep(step, outputs)
 
     fun collectForEachElement(config: kotlinx.serialization.json.JsonObject, outputs: MutableMap<String, String>) =
@@ -64,15 +69,25 @@ data class PlaywrightExecutorConfig(
 class PlaywrightRunExecutor(
     private val config: PlaywrightExecutorConfig
 ) {
-    fun openSession(runId: String, debugOptions: RunDebugOptions? = null): OpenedPlaywrightRunSession {
+    fun openSession(
+        runId: String,
+        debugOptions: RunDebugOptions? = null,
+        launchOptions: RunLaunchOptions? = null
+    ): OpenedPlaywrightRunSession {
+        val resolvedConfig = mergeConfig(launchOptions)
         val playwright = Playwright.create()
-        val browser = launchBrowser(playwright, debugOptions)
-        val session = PlaywrightRunSession(runId, browser, config)
+        val browser = launchBrowser(playwright, resolvedConfig, debugOptions)
+        val session = PlaywrightRunSession(runId, browser, resolvedConfig)
         return OpenedPlaywrightRunSession(playwright, browser, session)
     }
 
-    fun <T> withSession(runId: String, debugOptions: RunDebugOptions? = null, block: (PlaywrightRunSession) -> T): T {
-        val opened = openSession(runId, debugOptions)
+    fun <T> withSession(
+        runId: String,
+        debugOptions: RunDebugOptions? = null,
+        launchOptions: RunLaunchOptions? = null,
+        block: (PlaywrightRunSession) -> T
+    ): T {
+        val opened = openSession(runId, debugOptions, launchOptions)
 
         try {
             return block(opened.session)
@@ -83,11 +98,27 @@ class PlaywrightRunExecutor(
         }
     }
 
-    private fun launchBrowser(playwright: Playwright, debugOptions: RunDebugOptions?): Browser {
-        val target = resolveBrowserTarget(config.browser)
+    internal fun mergeConfig(launchOptions: RunLaunchOptions?): PlaywrightExecutorConfig {
+        if (launchOptions == null) {
+            return config
+        }
+
+        return config.copy(
+            browser = launchOptions.browser,
+            headless = launchOptions.headless,
+            defaultTimeoutMs = launchOptions.defaultTimeoutMs
+        )
+    }
+
+    private fun launchBrowser(
+        playwright: Playwright,
+        resolvedConfig: PlaywrightExecutorConfig,
+        debugOptions: RunDebugOptions?
+    ): Browser {
+        val target = resolveBrowserTarget(resolvedConfig.browser)
         val enableDebug = debugOptions?.enabled == true
         val useVisibleBrowser = enableDebug && (debugOptions.openVisibleBrowser || debugOptions.openDevtools)
-        val options = BrowserType.LaunchOptions().setHeadless(if (useVisibleBrowser) false else config.headless)
+        val options = BrowserType.LaunchOptions().setHeadless(if (useVisibleBrowser) false else resolvedConfig.headless)
         target.channel?.let { options.setChannel(it) }
 
         if (debugOptions?.openDevtools == true) {
@@ -101,7 +132,7 @@ class PlaywrightRunExecutor(
             "chromium" -> playwright.chromium().launch(options)
             "firefox" -> playwright.firefox().launch(options)
             "webkit" -> playwright.webkit().launch(options)
-            else -> throw RunExecutionException("不支持的浏览器类型: ${config.browser}")
+            else -> throw RunExecutionException("不支持的浏览器类型: ${resolvedConfig.browser}")
         }
     }
 }

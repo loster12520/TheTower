@@ -203,9 +203,172 @@ class StepTreeSupportTest {
                         put("inputVar", "items")
                         put("saveAs", "pick")
                     }
+                ),
+                step(
+                    "save-data-1",
+                    "saveData",
+                    buildJsonObject {
+                        put("content", "${'$'}{payload}")
+                        put("fileName", "payload.json")
+                        put("saveAs", "savedPath")
+                    }
+                ),
+                step(
+                    "save-excel-1",
+                    "saveExcel",
+                    buildJsonObject {
+                        put("inputVar", "tableRows")
+                        put("fileName", "report.xlsx")
+                        put("saveAs", "excelPath")
+                    }
+                ),
+                step(
+                    "import-excel-1",
+                    "importExcel",
+                    buildJsonObject {
+                        put("path", "data/report.xlsx")
+                        put("saveAs", "excelRows")
+                    }
+                ),
+                step(
+                    "listen-trigger-1",
+                    "listenRequestTrigger",
+                    buildJsonObject {
+                        put("listenerId", "api-login")
+                        put("urlPattern", "/api/login")
+                        put("matchType", "contains")
+                    }
+                ),
+                step(
+                    "listen-result-1",
+                    "listenRequestResult",
+                    buildJsonObject {
+                        put("listenerId", "api-login")
+                        put("saveAs", "requestSnapshot")
+                    }
+                ),
+                step(
+                    "listen-stop-1",
+                    "stopPageListen",
+                    buildJsonObject {
+                        put("listenerId", "api-login")
+                    }
+                ),
+                step(
+                    "extract-active-1",
+                    "extractActiveElement",
+                    buildJsonObject {
+                        put("extractType", "value")
+                        put("saveAs", "activeValue")
+                    }
+                ),
+                step(
+                    "clipboard-1",
+                    "getClipboardText",
+                    buildJsonObject {
+                        put("saveAs", "clipboardText")
+                    }
                 )
             )
         )
+    }
+
+    @Test
+    fun `validateStepTree rejects saveData without fileName`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "save-data-1",
+                        "saveData",
+                        buildJsonObject {
+                            put("content", "hello")
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects saveExcel without inputVar`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "save-excel-1",
+                        "saveExcel",
+                        buildJsonObject {
+                            put("fileName", "report.xlsx")
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects importExcel without path`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "import-excel-1",
+                        "importExcel",
+                        buildJsonObject {
+                            put("saveAs", "excelRows")
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects listenRequestTrigger without urlPattern`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "listen-trigger-1",
+                        "listenRequestTrigger",
+                        buildJsonObject {
+                            put("listenerId", "api-login")
+                        }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects stopPageListen without listenerId or stopAll`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "listen-stop-1",
+                        "stopPageListen",
+                        buildJsonObject { }
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `validateStepTree rejects getClipboardText without saveAs`() {
+        assertFailsWith<InvalidStepConfigException> {
+            validateStepTree(
+                listOf(
+                    step(
+                        "clipboard-1",
+                        "getClipboardText",
+                        buildJsonObject {}
+                    )
+                )
+            )
+        }
     }
 
     @Test
@@ -468,6 +631,20 @@ class StepTreeSupportTest {
         assertTrue(evaluateCondition(existsConfig, mapOf("token" to "abc")))
         assertTrue(evaluateCondition(compareConfig, mapOf("count" to "3")))
         assertFalse(evaluateCondition(compareConfig, mapOf("count" to "1")))
+    }
+
+    @Test
+    fun `evaluateCondition supports breakpointCondition field`() {
+        val config = buildJsonObject {
+            put("breakpointCondition", buildJsonObject {
+                put("left", "${'$'}{status}")
+                put("op", "equals")
+                put("right", "FAILED")
+            })
+        }
+
+        assertTrue(evaluateCondition(config, mapOf("status" to "FAILED"), "breakpointCondition"))
+        assertFalse(evaluateCondition(config, mapOf("status" to "SUCCEEDED"), "breakpointCondition"))
     }
 
     private fun step(id: String, type: String, config: kotlinx.serialization.json.JsonObject = buildJsonObject {}): StepNode {

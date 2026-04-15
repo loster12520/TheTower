@@ -40,10 +40,18 @@ data class RunArtifact(
 )
 
 @Serializable
+data class RunLaunchOptions(
+    val browser: String = "chromium",
+    val headless: Boolean = true,
+    val defaultTimeoutMs: Double = 10_000.0
+)
+
+@Serializable
 data class StartRunRequest(
     val templateId: String,
     val dryRun: Boolean = false,
-    val debug: RunDebugOptions? = null
+    val debug: RunDebugOptions? = null,
+    val launchOptions: RunLaunchOptions? = null
 )
 
 @Serializable
@@ -114,4 +122,32 @@ data class RunDebugSession(
     val lastFrameTs: String? = null,
     val lastError: String? = null,
     val latestContext: RunDebugContextSnapshot? = null
+)
+
+@Serializable
+data class DebugRemoteControlRequest(
+    val action: String,
+    val x: Int? = null,
+    val y: Int? = null,
+    val text: String? = null,
+    val clearBeforeType: Boolean = false
+)
+
+@Serializable
+data class DebugRemoteControlData(
+    val session: RunDebugSession,
+    val latestContext: RunDebugContextSnapshot? = null,
+    val previewFrame: DebugPreviewFrameData? = null,
+    val actionSummary: String
+)
+
+@Serializable
+data class DebugPreviewFrameData(
+    val mimeType: String,
+    val frameBase64: String,
+    val width: Int,
+    val height: Int,
+    val pageAlias: String? = null,
+    val contextId: String? = null,
+    val ts: String
 )

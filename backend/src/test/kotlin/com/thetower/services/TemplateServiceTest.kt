@@ -1,7 +1,9 @@
 package com.thetower.services
 
 import com.thetower.models.CreateTemplateRequest
+import com.thetower.models.CloneTemplateRequest
 import com.thetower.models.OtherStep
+import com.thetower.models.PatchTemplateRequest
 import com.thetower.models.Position
 import com.thetower.models.SaveTemplateRequest
 import com.thetower.models.StepData
@@ -13,7 +15,10 @@ import com.thetower.utils.SqliteConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -230,6 +235,138 @@ class TemplateServiceTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun `getTemplates filters by keyword over name and description`() {
+        service.createTemplate(
+            CreateTemplateRequest(
+                name = "抓取标题",
+                description = "提取页面标题",
+                schemaVersion = "0.0.8"
+            )
+        )
+        val other = service.createTemplate(
+            CreateTemplateRequest(
+                name = "批量登录",
+                description = "执行登录动作",
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        val byName = service.getTemplates(includeLastRun = true, keyword = "标题")
+        assertEquals(1, byName.size)
+        assertEquals("抓取标题", byName.first().name)
+
+        val byDescription = service.getTemplates(includeLastRun = true, keyword = "登录动作")
+        assertEquals(1, byDescription.size)
+        assertEquals(other.id, byDescription.first().id)
+    }
+
+    @Test
+    fun `createTemplate stores tags and groupName`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "带标签模板",
+                description = "用于标签测试",
+                groupName = "采集",
+                tags = listOf("采集", "标题", "采集"),
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        assertEquals("采集", created.groupName)
+        assertEquals(listOf("采集", "标题"), created.tags)
+    }
+
+    @Test
+    fun `getTemplates filters by groupName and tag`() {
+        service.createTemplate(
+            CreateTemplateRequest(
+                name = "采集标题",
+                groupName = "采集",
+                tags = listOf("标题", "页面"),
+                schemaVersion = "0.0.8"
+            )
+        )
+        service.createTemplate(
+            CreateTemplateRequest(
+                name = "登录流程",
+                groupName = "账号",
+                tags = listOf("登录"),
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        val byGroup = service.getTemplates(includeLastRun = true, groupName = "采集")
+        assertEquals(1, byGroup.size)
+        assertEquals("采集", byGroup.first().groupName)
+
+        val byTag = service.getTemplates(includeLastRun = true, tag = "标题")
+        assertEquals(1, byTag.size)
+        assertEquals("采集标题", byTag.first().name)
+    }
+
+    @Test
+    fun `updateTemplateMeta updates tags and groupName`() {
+        val created = service.createTemplate(
+            CreateTemplateRequest(
+                name = "待更新",
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        val updated = service.updateTemplateMeta(
+            created.id,
+            PatchTemplateRequest(groupName = "调试", tags = listOf("断点", "调试"))
+        )
+
+        assertEquals("调试", updated.groupName)
+        assertEquals(listOf("断点", "调试"), updated.tags)
+    }
+
+    @Test
+    fun `cloneTemplate duplicates workflow with new id and cleared lastRun`() {
+        val original = service.createTemplate(
+            CreateTemplateRequest(
+                name = "原模板",
+                description = "测试克隆",
+                schemaVersion = "0.0.8",
+                steps = listOf(step("click-1", "click"))
+            )
+        )
+
+        val cloned = service.cloneTemplate(original.id, CloneTemplateRequest())
+
+        assertTrue(cloned.id != original.id)
+        assertEquals("原模板 副本", cloned.name)
+        assertEquals(original.description, cloned.description)
+        assertEquals(original.steps, cloned.steps)
+        assertEquals(original.otherStep, cloned.otherStep)
+        assertEquals(original.stats.stepCount, cloned.stats.stepCount)
+        assertNull(cloned.lastRun)
+    }
+
+    @Test
+    fun `deleteTemplates returns deleted count and failed ids`() {
+        val first = service.createTemplate(
+            CreateTemplateRequest(
+                name = "first",
+                schemaVersion = "0.0.8"
+            )
+        )
+        val second = service.createTemplate(
+            CreateTemplateRequest(
+                name = "second",
+                schemaVersion = "0.0.8"
+            )
+        )
+
+        val result = service.deleteTemplates(listOf(first.id, "missing-id", second.id, first.id))
+
+        assertEquals(2, result.deletedCount)
+        assertEquals(listOf("missing-id"), result.failedIds)
+        assertFalse(service.getTemplates(includeLastRun = true).any { it.id == first.id || it.id == second.id })
     }
 
     private fun step(id: String, type: String, config: kotlinx.serialization.json.JsonObject = buildJsonObject {}): StepNode {

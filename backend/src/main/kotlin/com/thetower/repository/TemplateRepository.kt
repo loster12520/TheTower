@@ -52,6 +52,8 @@ class TemplateRepository(
             id = template.id
             name = template.name
             description = template.description
+            groupName = template.groupName
+            tagsJson = json.encodeToString(template.tags)
             schemaVersion = template.schemaVersion
             stepsJson = json.encodeToString(template.steps)
             otherStepJson = json.encodeToString(template.otherStep)
@@ -87,11 +89,14 @@ class TemplateRepository(
         val otherStep = json.decodeFromString<OtherStep>(entity.otherStepJson)
         val lastRunJson = entity.lastRunJson
         val lastRun = lastRunJson?.let { json.decodeFromString<LastRun>(it) }
+        val tags = runCatching { json.decodeFromString<List<String>>(entity.tagsJson) }.getOrDefault(emptyList())
 
         return WorkflowTemplate(
             id = entity.id,
             name = entity.name,
             description = entity.description,
+            groupName = entity.groupName,
+            tags = tags,
             schemaVersion = entity.schemaVersion,
             steps = steps,
             otherStep = otherStep,

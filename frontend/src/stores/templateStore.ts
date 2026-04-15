@@ -1,6 +1,6 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { templateApi } from '@/services/api';
-import type { WorkflowTemplate, TemplateSummary, ApiError } from '@/models';
+import { templateApi, templateMarketApi } from '@/services/api';
+import type { WorkflowTemplate, TemplateSummary, ApiError, BatchDeleteTemplatesData, PublishedTemplateSummary } from '@/models';
 
 export const DEFAULT_TEMPLATE_SCHEMA_VERSION = '0.0.8';
 export const SUPPORTED_TEMPLATE_SCHEMA_VERSIONS = ['0.0.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.0.8'] as const;
@@ -13,6 +13,15 @@ class TemplateStore {
   templates: TemplateListItem[] = [];
   loading = false;
   error: string | null = null;
+  searchKeyword = '';
+  selectedGroupName = '';
+  selectedTag = '';
+  selectedTemplateIds: string[] = [];
+  groupOptions: string[] = [];
+  tagOptions: string[] = [];
+  marketTemplates: PublishedTemplateSummary[] = [];
+  marketLoading = false;
+  marketDrawerVisible = false;
 
   // 对话框状态
   createModalVisible = false;
@@ -23,15 +32,46 @@ class TemplateStore {
     makeAutoObservable(this);
   }
 
+  private normalizeTemplateItem(template: TemplateListItem): TemplateListItem {
+    return {
+      ...template,
+      groupName: template.groupName ?? null,
+      tags: Array.isArray(template.tags) ? template.tags : [],
+      lastRun: template.lastRun ?? null,
+    };
+  }
+
+  private normalizeMarketTemplate(item: PublishedTemplateSummary): PublishedTemplateSummary {
+    return {
+      ...item,
+      groupName: item.groupName ?? null,
+      description: item.description ?? null,
+      tags: Array.isArray(item.tags) ? item.tags : [],
+    };
+  }
+
   // 获取模板列表
-  async fetchTemplates() {
+  async fetchTemplates(
+    keyword: string = this.searchKeyword,
+    groupName: string = this.selectedGroupName,
+    tag: string = this.selectedTag,
+  ) {
     this.setLoading(true);
     this.setError(null);
 
     try {
-      const response = await templateApi.list();
+      const response = await templateApi.list(
+        true,
+        keyword.trim() || undefined,
+        groupName.trim() || undefined,
+        tag.trim() || undefined,
+      );
       runInAction(() => {
-        this.templates = response.data.items;
+        this.templates = response.data.items.map((item) => this.normalizeTemplateItem(item));
+        const visibleIds = new Set(this.templates.map((template) => template.id));
+        this.selectedTemplateIds = this.selectedTemplateIds.filter((id) => visibleIds.has(id));
+        this.groupOptions = Array.from(new Set([...this.groupOptions, ...this.templates.map((template) => template.groupName).filter(Boolean) as string[]])).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        this.tagOptions = Array.from(new Set([...this.tagOptions, ...this.templates.flatMap((template) => template.tags)])).sort((a, b) => a.localeCompare(b, 'zh-CN'));
       });
     } catch (error) {
       const apiError = error as ApiError;
@@ -42,11 +82,13 @@ class TemplateStore {
   }
 
   // 创建模板
-  async createTemplate(name: string, description?: string): Promise<string | null> {
+  async createTemplate(name: string, description?: string, groupName?: string, tags: string[] = []): Promise<string | null> {
     try {
       const response = await templateApi.create({
         name,
         description: description || null,
+        groupName: groupName?.trim() || null,
+        tags,
         schemaVersion: DEFAULT_TEMPLATE_SCHEMA_VERSION,
         steps: [],
         otherStep: { nodes: [], edges: [] }
@@ -63,9 +105,9 @@ class TemplateStore {
   }
 
   // 重命名模板
-  async renameTemplate(id: string, name: string, description?: string): Promise<boolean> {
+  async renameTemplate(id: string, name: string, description?: string, groupName?: string, tags: string[] = []): Promise<boolean> {
     try {
-      await templateApi.updateMeta(id, { name, description });
+      await templateApi.updateMeta(id, { name, description, groupName: groupName?.trim() || null, tags });
       // 刷新列表
       await this.fetchTemplates();
       return true;
@@ -87,6 +129,31 @@ class TemplateStore {
       const apiError = error as ApiError;
       this.setError(apiError.message || '删除模板失败');
       return false;
+    }
+  }
+
+  async cloneTemplate(id: string, name?: string): Promise<string | null> {
+    try {
+      const response = await templateApi.clone(id, name ? { name } : undefined);
+      await this.fetchTemplates();
+      return response.data.id;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '克隆模板失败');
+      return null;
+    }
+  }
+
+  async batchDeleteTemplates(ids: string[]): Promise<BatchDeleteTemplatesData | null> {
+    try {
+      const response = await templateApi.batchDelete(ids);
+      await this.fetchTemplates();
+      this.clearSelection();
+      return response.data;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '批量删除模板失败');
+      return null;
     }
   }
 
@@ -152,6 +219,8 @@ class TemplateStore {
       const created = await templateApi.create({
         name: name.trim(),
         description: typeof description === 'string' ? description : null,
+        groupName: typeof obj.groupName === 'string' ? obj.groupName : null,
+        tags: Array.isArray(obj.tags) ? obj.tags.filter((item): item is string => typeof item === 'string') : [],
         schemaVersion: schemaVersion as string,
         steps: [],
         otherStep: { nodes: [], edges: [] },
@@ -169,6 +238,52 @@ class TemplateStore {
     } catch (error) {
       const apiError = error as ApiError;
       this.setError(apiError.message || '导入模板失败');
+      return null;
+    }
+  }
+
+  async fetchMarketTemplates(keyword?: string) {
+    this.marketLoading = true;
+    this.setError(null);
+
+    try {
+      const response = await templateMarketApi.list(keyword?.trim() || undefined);
+      runInAction(() => {
+        this.marketTemplates = response.data.items.map((item) => this.normalizeMarketTemplate(item));
+      });
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '获取模板市场失败');
+    } finally {
+      runInAction(() => {
+        this.marketLoading = false;
+      });
+    }
+  }
+
+  async publishTemplateToMarket(templateId: string): Promise<PublishedTemplateSummary | null> {
+    try {
+      const response = await templateMarketApi.publish(templateId);
+      const normalized = this.normalizeMarketTemplate(response.data);
+      runInAction(() => {
+        this.marketTemplates = [normalized, ...this.marketTemplates.filter((item) => item.id !== normalized.id)];
+      });
+      return normalized;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '发布到模板市场失败');
+      return null;
+    }
+  }
+
+  async importMarketTemplate(id: string, name?: string): Promise<string | null> {
+    try {
+      const response = await templateMarketApi.importTemplate(id, name ? { name } : undefined);
+      await this.fetchTemplates();
+      return response.data.id;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '导入市场模板失败');
       return null;
     }
   }
@@ -192,6 +307,60 @@ class TemplateStore {
 
   setCurrentTemplate(template: TemplateListItem | null) {
     this.currentTemplate = template;
+  }
+
+  setMarketDrawerVisible(visible: boolean) {
+    this.marketDrawerVisible = visible;
+  }
+
+  setSearchKeyword(keyword: string) {
+    this.searchKeyword = keyword;
+  }
+
+  setSelectedGroupName(groupName: string) {
+    this.selectedGroupName = groupName;
+  }
+
+  setSelectedTag(tag: string) {
+    this.selectedTag = tag;
+  }
+
+  clearFilters() {
+    this.searchKeyword = '';
+    this.selectedGroupName = '';
+    this.selectedTag = '';
+  }
+
+  toggleTemplateSelection(id: string, checked?: boolean) {
+    const exists = this.selectedTemplateIds.includes(id);
+    const shouldSelect = checked ?? !exists;
+    if (shouldSelect && !exists) {
+      this.selectedTemplateIds = [...this.selectedTemplateIds, id];
+      return;
+    }
+    if (!shouldSelect && exists) {
+      this.selectedTemplateIds = this.selectedTemplateIds.filter((item) => item !== id);
+    }
+  }
+
+  toggleSelectAllCurrent(checked: boolean) {
+    this.selectedTemplateIds = checked ? this.templates.map((template) => template.id) : [];
+  }
+
+  clearSelection() {
+    this.selectedTemplateIds = [];
+  }
+
+  get hasSelection() {
+    return this.selectedTemplateIds.length > 0;
+  }
+
+  get isAllCurrentSelected() {
+    return this.templates.length > 0 && this.selectedTemplateIds.length === this.templates.length;
+  }
+
+  get hasActiveFilters() {
+    return !!(this.searchKeyword || this.selectedGroupName || this.selectedTag);
   }
 
   // 获取状态标签颜色

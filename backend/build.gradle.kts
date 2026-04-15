@@ -45,6 +45,7 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.17.2")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
+    implementation("org.apache.poi:poi-ooxml:5.4.1")
     
     // Test
     testImplementation("io.ktor:ktor-server-tests:2.3.12")

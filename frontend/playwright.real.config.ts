@@ -13,7 +13,7 @@ export default defineConfig({
   webServer: {
     command: 'cmd /c "set PORT=8011&&set UMI_APP_USE_MOCK=false&&set UMI_APP_WS_BASE_URL=ws://127.0.0.1:8080/ws/v1&&npm run dev"',
     url: 'http://127.0.0.1:8011',
-    reuseExistingServer: false,
+    reuseExistingServer: true,
     timeout: 120_000,
   },
   reporter: 'list',

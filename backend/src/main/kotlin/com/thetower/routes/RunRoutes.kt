@@ -1,6 +1,7 @@
 package com.thetower.routes
 
 import com.thetower.models.ApiResponse
+import com.thetower.models.DebugRemoteControlRequest
 import com.thetower.models.DeletedData
 import com.thetower.models.RunListData
 import com.thetower.models.RunStatus
@@ -25,7 +26,13 @@ fun Application.runRoutes(runService: RunService) {
         route("/api/v1/runs") {
             post {
                 val request = call.receive<StartRunRequest>()
-                val data = runService.startRun(request.templateId, request.dryRun, call.requestId(), request.debug)
+                val data = runService.startRun(
+                    request.templateId,
+                    request.dryRun,
+                    call.requestId(),
+                    request.debug,
+                    request.launchOptions
+                )
                 call.respond(
                     HttpStatusCode.OK,
                     data.success(call.requestId())
@@ -119,6 +126,16 @@ fun Application.runRoutes(runService: RunService) {
                 call.respond(
                     HttpStatusCode.OK,
                     session.success(call.requestId())
+                )
+            }
+
+            post("/{id}/debug/remote-control") {
+                val id = call.parameters["id"] ?: ""
+                val request = call.receive<DebugRemoteControlRequest>()
+                val data = runService.remoteControlDebug(id, request)
+                call.respond(
+                    HttpStatusCode.OK,
+                    data.success(call.requestId())
                 )
             }
 

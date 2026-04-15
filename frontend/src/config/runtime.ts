@@ -12,6 +12,7 @@ export interface RuntimeConfig {
     enabled: boolean;
     tokenHeader: string;
     tokenStorageKey: string;
+    workspaceStorageKey: string;
   };
   log: {
     enabled: boolean;
@@ -34,6 +35,7 @@ export const runtimeConfig: RuntimeConfig = {
     enabled: process.env.UMI_APP_AUTH_ENABLED === 'true',
     tokenHeader: process.env.UMI_APP_AUTH_HEADER || 'Authorization',
     tokenStorageKey: process.env.UMI_APP_AUTH_TOKEN_KEY || 'thetower_token',
+    workspaceStorageKey: process.env.UMI_APP_WORKSPACE_KEY || 'thetower_workspace_id',
   },
   log: {
     enabled: process.env.UMI_APP_LOG_ENABLED !== 'false',

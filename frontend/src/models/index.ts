@@ -21,6 +21,8 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   description: string | null;
+  groupName: string | null;
+  tags: string[];
   schemaVersion: string;
   steps: Step[];
   otherStep: OtherStep;
@@ -34,10 +36,130 @@ export interface TemplateSummary {
   id: string;
   name: string;
   description: string | null;
+  groupName: string | null;
+  tags: string[];
   schemaVersion: string;
   updatedAt: string;
   stats: { stepCount: number };
   lastRun: LastRun | null;
+}
+
+export interface BatchDeleteTemplatesData {
+  deletedCount: number;
+  failedIds: string[];
+}
+
+export interface PublishedTemplateSummary {
+  id: string;
+  sourceTemplateId: string;
+  name: string;
+  description: string | null;
+  groupName: string | null;
+  tags: string[];
+  schemaVersion: string;
+  stats: { stepCount: number };
+  sourceUpdatedAt: string;
+  publishedAt: string;
+}
+
+export type ScheduleTriggerType = 'ONE_TIME' | 'INTERVAL';
+
+export interface Schedule {
+  id: string;
+  templateId: string;
+  templateName: string;
+  triggerType: ScheduleTriggerType;
+  delaySeconds: number | null;
+  intervalSeconds: number | null;
+  enabled: boolean;
+  nextTriggerAt: string | null;
+  lastTriggeredAt: string | null;
+  lastRunId: string | null;
+  lastRunStatus: string | null;
+  lastError: { code: string; message: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceMembership {
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+}
+
+export interface UserSession {
+  token: string;
+  userId: string;
+  name: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+  workspaces: WorkspaceMembership[];
+  issuedAt: string;
+  expiresAt: string;
+}
+
+export type TemplatePermission = 'OWNER' | 'EDITOR' | 'VIEWER';
+
+export interface TemplateCollaborator {
+  userId: string;
+  userName: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  permission: TemplatePermission;
+  invitedAt: string;
+  lastActiveAt: string | null;
+}
+
+export interface TemplateCollaborationData {
+  templateId: string;
+  ownerUserId: string;
+  ownerUserName: string;
+  ownerWorkspaceId: string;
+  ownerWorkspaceName: string;
+  collaborators: TemplateCollaborator[];
+  currentPermission: TemplatePermission;
+  shared: boolean;
+}
+
+export interface TemplatePresenceMember {
+  userId: string;
+  userName: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+  joinedAt: string;
+  lastSeenAt: string;
+}
+
+export interface TemplatePresenceData {
+  templateId: string;
+  members: TemplatePresenceMember[];
+  onlineCount: number;
+  updatedAt: string;
+  latestPatch?: TemplatePatchAppliedData | null;
+}
+
+export interface TemplatePatchAppliedData {
+  templateId: string;
+  savedByUserId: string;
+  savedByUserName: string;
+  savedByWorkspaceId: string;
+  savedByWorkspaceName: string;
+  updatedAt: string;
+}
+
+export interface CollaborationPresenceChangedEvent {
+  type: 'COLLABORATION_PRESENCE_CHANGED';
+  data: TemplatePresenceData;
+}
+
+export interface CollaborationPatchAppliedEvent {
+  type: 'COLLABORATION_PATCH_APPLIED';
+  data: TemplatePatchAppliedData;
 }
 
 export type StepType =
@@ -63,9 +185,17 @@ export type StepType =
   | 'uploadFiles'
   | 'executeJs'
   | 'waitForResponse'
+  | 'listenRequestTrigger'
+  | 'listenRequestResult'
+  | 'stopPageListen'
   | 'getUrl'
   | 'downloadFile'
   | 'importText'
+  | 'saveData'
+  | 'saveExcel'
+  | 'importExcel'
+  | 'extractActiveElement'
+  | 'getClipboardText'
   | 'totp'
   | 'getCookies'
   | 'clearCookies'
@@ -152,8 +282,21 @@ export type NodeConfig = Record<string, unknown> & {
   targetFormat?: 'object' | 'string';
   direction?: 'parse' | 'stringify';
   value?: string;
+  content?: string;
+  fileName?: string;
+  saveDir?: string;
+  path?: string;
+  sheetName?: string;
+  useHeader?: boolean;
+  listenerId?: string;
+  urlPattern?: string;
+  matchType?: 'contains' | 'equals';
+  method?: string;
+  stopAll?: boolean;
+  clearAfterRead?: boolean;
   keyPath?: string;
   condition?: ConditionConfig;
+  breakpointCondition?: ConditionConfig;
   then?: Step[];
   else?: Step[];
   body?: Step[];
@@ -174,6 +317,12 @@ export interface RunArtifact {
   kind: string;
   relativePath: string;
   createdAt: string;
+}
+
+export interface RunLaunchOptions {
+  browser: 'chromium' | 'chrome' | 'edge' | 'firefox' | 'webkit';
+  headless: boolean;
+  defaultTimeoutMs: number;
 }
 
 export interface RunDebugOptions {
@@ -236,6 +385,13 @@ export interface DebugPreviewFrame {
   pageAlias?: string | null;
   contextId?: string | null;
   ts: string;
+}
+
+export interface DebugRemoteControlData {
+  session: RunDebugSession;
+  latestContext?: RunDebugContextSnapshot | null;
+  previewFrame?: DebugPreviewFrame | null;
+  actionSummary: string;
 }
 
 // 运行相关类型

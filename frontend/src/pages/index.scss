@@ -13,6 +13,22 @@
 
 .home-page__actions {
   margin-bottom: 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.home-page__actions-main {
+  flex: 1;
+}
+
+.home-page__search {
+  min-width: 280px;
+}
+
+.home-page__filter {
+  min-width: 180px;
 }
 
 .home-page__error-box {
@@ -58,4 +74,25 @@
 
 .template-card {
   height: 100%;
+}
+
+@media (max-width: 768px) {
+  .home-page__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .home-page__actions-main {
+    width: 100%;
+  }
+
+  .home-page__search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .home-page__filter {
+    width: 100%;
+    min-width: 0;
+  }
 }

@@ -27,6 +27,7 @@ fun ensureSqliteReady(jdbcUrl: String) {
         applyMigration(conn, 2, "db/migration/V2__add_indexes.sql")
         applyMigration(conn, 3, "db/migration/V3__ensure_runs_table.sql")
         applyMigration(conn, 4, "db/migration/V4__add_run_outputs_and_artifacts.sql")
+        applyMigration(conn, 5, "db/migration/V5__add_template_groups_and_tags.sql")
         conn.commit()
     }
 

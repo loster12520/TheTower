@@ -6,6 +6,7 @@ import com.microsoft.playwright.Download
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.PlaywrightException
+import com.microsoft.playwright.Request
 import com.microsoft.playwright.Response
 import com.microsoft.playwright.options.MouseButton
 import com.microsoft.playwright.options.WaitForSelectorState
@@ -30,12 +31,19 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.Base64
+import java.util.function.Consumer
+import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.ss.usermodel.WorkbookFactory
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -62,6 +70,13 @@ data class DebugPreviewFrame(
     val contextId: String
 )
 
+internal fun clampDebugCoordinate(value: Int, upperBoundExclusive: Int): Int {
+    if (upperBoundExclusive <= 0) {
+        return 0
+    }
+    return value.coerceIn(0, upperBoundExclusive - 1)
+}
+
 class PlaywrightRunSession(
     private val runId: String,
     private val browser: Browser,
@@ -80,10 +95,117 @@ class PlaywrightRunSession(
         val order: JsonObject?
     )
 
+    private class RequestListenerState(
+        val listenerId: String,
+        val page: Page,
+        val pageAlias: String?,
+        val contextId: String,
+        private val urlPattern: String,
+        private val matchType: String,
+        private val method: String?,
+        val requestHandler: Consumer<Request>,
+        val responseHandler: Consumer<Response>,
+        val requestFailedHandler: Consumer<Request>
+    ) {
+        private var active = true
+        private var requestCount = 0
+        private var responseCount = 0
+        private var failedCount = 0
+        private var lastUpdatedAt: String? = null
+        private var latestRequest: JsonObject? = null
+        private var latestResponse: JsonObject? = null
+        private var latestFailure: JsonObject? = null
+
+        @Synchronized
+        fun matches(request: Request): Boolean {
+            val methodMatched = method.isNullOrBlank() || request.method().equals(method, ignoreCase = true)
+            val urlMatched = when (matchType) {
+                "equals" -> request.url() == urlPattern
+                else -> request.url().contains(urlPattern)
+            }
+            return active && methodMatched && urlMatched
+        }
+
+        @Synchronized
+        fun recordRequest(request: Request) {
+            requestCount += 1
+            latestRequest = buildJsonObject {
+                put("url", JsonPrimitive(request.url()))
+                put("method", JsonPrimitive(request.method()))
+                put("resourceType", JsonPrimitive(request.resourceType()))
+                put("postData", JsonPrimitive(request.postData() ?: ""))
+                put("headers", buildJsonObject {
+                    request.headers().forEach { (key, value) -> put(key, JsonPrimitive(value)) }
+                })
+            }
+            lastUpdatedAt = nowIso()
+        }
+
+        @Synchronized
+        fun recordResponse(response: Response) {
+            responseCount += 1
+            latestResponse = buildJsonObject {
+                put("url", JsonPrimitive(response.url()))
+                put("status", JsonPrimitive(response.status()))
+                put("statusText", JsonPrimitive(response.statusText()))
+                put("ok", JsonPrimitive(response.ok()))
+                put("headers", buildJsonObject {
+                    response.headers().forEach { (key, value) -> put(key, JsonPrimitive(value)) }
+                })
+            }
+            lastUpdatedAt = nowIso()
+        }
+
+        @Synchronized
+        fun recordFailure(request: Request) {
+            failedCount += 1
+            latestFailure = buildJsonObject {
+                put("url", JsonPrimitive(request.url()))
+                put("method", JsonPrimitive(request.method()))
+                put("failure", JsonPrimitive(request.failure()))
+            }
+            lastUpdatedAt = nowIso()
+        }
+
+        @Synchronized
+        fun snapshot(): String {
+            return buildJsonObject {
+                put("listenerId", JsonPrimitive(listenerId))
+                put("pageAlias", JsonPrimitive(pageAlias ?: ""))
+                put("contextId", JsonPrimitive(contextId))
+                put("urlPattern", JsonPrimitive(urlPattern))
+                put("matchType", JsonPrimitive(matchType))
+                put("method", JsonPrimitive(method ?: ""))
+                put("active", JsonPrimitive(active))
+                put("requestCount", JsonPrimitive(requestCount))
+                put("responseCount", JsonPrimitive(responseCount))
+                put("failedCount", JsonPrimitive(failedCount))
+                put("lastUpdatedAt", JsonPrimitive(lastUpdatedAt ?: ""))
+                put("latestRequest", latestRequest ?: buildJsonObject { })
+                put("latestResponse", latestResponse ?: buildJsonObject { })
+                put("latestFailure", latestFailure ?: buildJsonObject { })
+            }.toString()
+        }
+
+        @Synchronized
+        fun clearLatest() {
+            latestRequest = null
+            latestResponse = null
+            latestFailure = null
+            lastUpdatedAt = null
+        }
+
+        @Synchronized
+        fun deactivate() {
+            active = false
+        }
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
     private val contextStack = mutableListOf(createScope())
     private val retainedContexts = mutableListOf<ContextScope>()
     private val sequenceState = mutableMapOf<String, Int>()
+    private val requestListeners = mutableMapOf<String, RequestListenerState>()
     private val artifactRoot: Path = Paths.get("data", "runs", runId, "artifacts")
 
     init {
@@ -121,6 +243,39 @@ class PlaywrightRunSession(
         }
     }
 
+        fun debugClickAt(x: Int, y: Int): StepExecutionResult {
+                val page = currentPage()
+                val viewport = page.viewportSize()
+                val safeX = clampDebugCoordinate(x, viewport?.width ?: Int.MAX_VALUE)
+                val safeY = clampDebugCoordinate(y, viewport?.height ?: Int.MAX_VALUE)
+                page.mouse().click(safeX.toDouble(), safeY.toDouble())
+                return StepExecutionResult(pageAlias = currentPageAlias(), contextId = currentContextId())
+        }
+
+        fun debugTypeText(text: String, clearBeforeType: Boolean): StepExecutionResult {
+                val page = currentPage()
+                if (clearBeforeType) {
+                        page.evaluate(
+                                """
+                                () => {
+                                    const active = document.activeElement;
+                                    if (!active) return;
+                                    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+                                        active.value = '';
+                                        active.dispatchEvent(new Event('input', { bubbles: true }));
+                                        return;
+                                    }
+                                    if (active instanceof HTMLElement && active.isContentEditable) {
+                                        active.textContent = '';
+                                    }
+                                }
+                                """.trimIndent()
+                        )
+                }
+                page.keyboard().insertText(text)
+                return StepExecutionResult(pageAlias = currentPageAlias(), contextId = currentContextId())
+        }
+
     fun executeStep(step: StepNode, outputs: MutableMap<String, String>): StepExecutionResult {
         return when (step.type) {
             "openUrl" -> executeOpenUrl(step.data.config, outputs)
@@ -140,9 +295,17 @@ class PlaywrightRunSession(
             "uploadFiles" -> executeUploadFiles(step.data.config, outputs)
             "executeJs" -> executeJs(step.data.config, outputs)
             "waitForResponse" -> executeWaitForResponse(step.data.config, outputs)
+            "listenRequestTrigger" -> executeListenRequestTrigger(step.data.config, outputs)
+            "listenRequestResult" -> executeListenRequestResult(step.data.config, outputs)
+            "stopPageListen" -> executeStopPageListen(step.data.config, outputs)
             "getUrl" -> executeGetUrl(step.data.config, outputs)
             "downloadFile" -> executeDownloadFile(step.data.config, outputs)
             "importText" -> executeImportText(step.data.config, outputs)
+            "saveData" -> executeSaveData(step.data.config, outputs)
+            "saveExcel" -> executeSaveExcel(step.data.config, outputs)
+            "importExcel" -> executeImportExcel(step.data.config, outputs)
+            "extractActiveElement" -> executeExtractActiveElement(step.data.config, outputs)
+            "getClipboardText" -> executeGetClipboardText(step.data.config, outputs)
             "totp" -> executeTotp(step.data.config, outputs)
             "getCookies" -> executeGetCookies(step.data.config, outputs)
             "clearCookies" -> executeClearCookies()
@@ -209,6 +372,7 @@ class PlaywrightRunSession(
     }
 
     fun closeQuietly() {
+        requestListeners.keys.toList().forEach(::stopRequestListener)
         retainedContexts.forEach(::closeScope)
         retainedContexts.clear()
         while (contextStack.isNotEmpty()) {
@@ -536,6 +700,81 @@ class PlaywrightRunSession(
         }
     }
 
+    private fun executeListenRequestTrigger(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val listenerId = resolveRequiredText(config, "listenerId", outputs)
+        val urlPattern = resolveRequiredText(config, "urlPattern", outputs)
+        val matchType = (resolveOptionalText(config, "matchType", outputs) ?: "contains").lowercase()
+        val method = resolveOptionalText(config, "method", outputs)?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
+        val saveAs = resolveOptionalText(config, "saveAs", outputs)
+        val page = currentPage()
+
+        stopRequestListener(listenerId)
+
+        lateinit var state: RequestListenerState
+        val requestHandler = Consumer<Request> { request ->
+            if (state.matches(request)) {
+                state.recordRequest(request)
+            }
+        }
+        val responseHandler = Consumer<Response> { response ->
+            if (state.matches(response.request())) {
+                state.recordResponse(response)
+            }
+        }
+        val requestFailedHandler = Consumer<Request> { request ->
+            if (state.matches(request)) {
+                state.recordFailure(request)
+            }
+        }
+
+        state = RequestListenerState(
+            listenerId = listenerId,
+            page = page,
+            pageAlias = currentPageAlias(),
+            contextId = currentContextId(),
+            urlPattern = urlPattern,
+            matchType = matchType,
+            method = method,
+            requestHandler = requestHandler,
+            responseHandler = responseHandler,
+            requestFailedHandler = requestFailedHandler
+        )
+
+        page.onRequest(requestHandler)
+        page.onResponse(responseHandler)
+        page.onRequestFailed(requestFailedHandler)
+        requestListeners[listenerId] = state
+
+        val outputMap = if (!saveAs.isNullOrBlank()) mapOf(saveAs to listenerId) else emptyMap()
+        return StepExecutionResult(outputs = outputMap, contextId = currentContextId(), pageAlias = currentPageAlias())
+    }
+
+    private fun executeListenRequestResult(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val listenerId = resolveRequiredText(config, "listenerId", outputs)
+        val saveAs = resolveRequiredText(config, "saveAs", outputs)
+        val clearAfterRead = resolveOptionalBoolean(config, "clearAfterRead", outputs) ?: false
+        val state = requestListeners[listenerId]
+            ?: throw BadRequestException("找不到请求监听器: $listenerId", mapOf("field" to "listenerId", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        val snapshot = state.snapshot()
+        if (clearAfterRead) {
+            state.clearLatest()
+        }
+        return StepExecutionResult(outputs = mapOf(saveAs to snapshot), contextId = currentContextId(), pageAlias = currentPageAlias())
+    }
+
+    private fun executeStopPageListen(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val stopAll = resolveOptionalBoolean(config, "stopAll", outputs) ?: false
+        val listenerId = resolveOptionalText(config, "listenerId", outputs)?.trim()?.takeIf { it.isNotBlank() }
+
+        if (stopAll || listenerId == null) {
+            stopRequestListenersForPage(currentPage())
+        } else {
+            stopRequestListener(listenerId)
+        }
+
+        return StepExecutionResult(contextId = currentContextId(), pageAlias = currentPageAlias())
+    }
+
     private fun executeGetUrl(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
         val extract = (resolveOptionalText(config, "extract", outputs) ?: "full").lowercase()
         val saveAs = resolveRequiredText(config, "saveAs", outputs)
@@ -589,6 +828,212 @@ class PlaywrightRunSession(
         return StepExecutionResult(outputs = mapOf(saveAs to buildJsonArray {
             lines.forEach { add(JsonPrimitive(it)) }
         }.toString()), contextId = currentContextId())
+    }
+
+    private fun executeSaveData(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val content = resolveRequiredText(config, "content", outputs)
+        val fileName = resolveRequiredText(config, "fileName", outputs)
+        val saveDir = resolveOptionalText(config, "saveDir", outputs)
+        val saveAs = resolveOptionalText(config, "saveAs", outputs)
+
+        val targetDir = if (!saveDir.isNullOrBlank()) artifactRoot.resolve(saveDir) else artifactRoot
+        Files.createDirectories(targetDir)
+
+        val targetPath = targetDir.resolve(fileName.replace(Regex("[\\/:*?\"<>|]+"), "-").trim().ifBlank { "saved-data.txt" })
+        try {
+            Files.writeString(targetPath, content)
+        } catch (ex: Exception) {
+            throw RunExecutionException("保存数据失败: ${ex.message}")
+        }
+
+        val artifact = buildArtifact(targetPath, targetPath.fileName.toString(), "data")
+        val outputMap = if (!saveAs.isNullOrBlank()) mapOf(saveAs to artifact.relativePath) else emptyMap()
+        return StepExecutionResult(outputs = outputMap, artifacts = listOf(artifact), contextId = currentContextId())
+    }
+
+    private fun executeSaveExcel(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val inputVar = resolveRequiredText(config, "inputVar", outputs)
+        val raw = outputs[inputVar]?.takeIf { it.isNotBlank() }
+            ?: throw BadRequestException("saveExcel 输入变量不存在: $inputVar", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        val fileName = resolveRequiredText(config, "fileName", outputs)
+        val saveDir = resolveOptionalText(config, "saveDir", outputs)
+        val sheetName = resolveOptionalText(config, "sheetName", outputs)?.takeIf { it.isNotBlank() } ?: "Sheet1"
+        val saveAs = resolveOptionalText(config, "saveAs", outputs)
+
+        val rows = parseExcelSourceRows(raw)
+        val targetDir = if (!saveDir.isNullOrBlank()) artifactRoot.resolve(saveDir) else artifactRoot
+        Files.createDirectories(targetDir)
+        val targetPath = targetDir.resolve(safeFileName(fileName.removeSuffix(".xlsx"), "xlsx"))
+
+        try {
+            XSSFWorkbook().use { workbook ->
+                val sheet = workbook.createSheet(sheetName)
+                rows.forEachIndexed { rowIndex, values ->
+                    val row = sheet.createRow(rowIndex)
+                    values.forEachIndexed { cellIndex, value ->
+                        row.createCell(cellIndex, CellType.STRING).setCellValue(value)
+                    }
+                }
+                Files.newOutputStream(targetPath).use { outputStream ->
+                    workbook.write(outputStream)
+                }
+            }
+        } catch (ex: Exception) {
+            throw RunExecutionException("保存 Excel 失败: ${ex.message}")
+        }
+
+        val artifact = buildArtifact(targetPath, targetPath.fileName.toString(), "excel")
+        val outputMap = if (!saveAs.isNullOrBlank()) mapOf(saveAs to artifact.relativePath) else emptyMap()
+        return StepExecutionResult(outputs = outputMap, artifacts = listOf(artifact), contextId = currentContextId())
+    }
+
+    private fun executeImportExcel(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val path = resolveRequiredText(config, "path", outputs)
+        val sheetName = resolveOptionalText(config, "sheetName", outputs)
+        val useHeader = resolveOptionalBoolean(config, "useHeader", outputs) ?: true
+        val saveAs = resolveRequiredText(config, "saveAs", outputs)
+        val formatter = DataFormatter()
+        val filePath = resolveFilesystemPath(path)
+
+        val serialized = try {
+            WorkbookFactory.create(filePath.toFile()).use { workbook ->
+                val sheet = if (!sheetName.isNullOrBlank()) {
+                    workbook.getSheet(sheetName)
+                        ?: throw BadRequestException("找不到工作表: $sheetName", mapOf("field" to "sheetName", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+                } else {
+                    workbook.getSheetAt(0)
+                }
+
+                serializeSheetRows(sheet, formatter, useHeader)
+            }
+        } catch (ex: BadRequestException) {
+            throw ex
+        } catch (ex: Exception) {
+            throw RunExecutionException("导入 Excel 失败: ${ex.message}")
+        }
+
+        return StepExecutionResult(outputs = mapOf(saveAs to serialized), contextId = currentContextId())
+    }
+
+    private fun executeExtractActiveElement(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val extractType = (resolveOptionalText(config, "extractType", outputs) ?: "value").lowercase()
+        val saveAs = resolveRequiredText(config, "saveAs", outputs)
+        val script = when (extractType) {
+            "value" -> """
+                () => {
+                  const active = document.activeElement;
+                  if (!active) return '';
+                  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) {
+                    return active.value ?? '';
+                  }
+                  return active.getAttribute('value') || active.textContent || '';
+                }
+            """.trimIndent()
+            "text" -> "() => document.activeElement?.textContent || ''"
+            "html" -> "() => document.activeElement?.outerHTML || ''"
+            "tagname" -> "() => document.activeElement?.tagName?.toLowerCase() || ''"
+            else -> throw BadRequestException("extractActiveElement.extractType 不支持: $extractType", mapOf("field" to "extractType", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        }
+
+        val result = currentPage().evaluate(script)?.toString() ?: ""
+        return StepExecutionResult(outputs = mapOf(saveAs to result), contextId = currentContextId())
+    }
+
+    private fun executeGetClipboardText(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
+        val saveAs = resolveRequiredText(config, "saveAs", outputs)
+        val script =
+            """
+            async () => {
+              if (!globalThis.navigator || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+                throw new Error('当前页面不支持读取剪贴板文本');
+              }
+              return await navigator.clipboard.readText();
+            }
+            """.trimIndent()
+
+        val text = try {
+            currentPage().evaluate(script)?.toString() ?: ""
+        } catch (ex: Exception) {
+            throw RunExecutionException("读取剪贴板失败: ${ex.message}")
+        }
+        return StepExecutionResult(outputs = mapOf(saveAs to text), contextId = currentContextId())
+    }
+
+    private fun parseExcelSourceRows(raw: String): List<List<String>> {
+        val parsed = runCatching { json.parseToJsonElement(raw) }.getOrElse {
+            throw BadRequestException("saveExcel 输入变量必须是 JSON 数组", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        }
+        val rows = parsed as? JsonArray
+            ?: throw BadRequestException("saveExcel 输入变量必须是 JSON 数组", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        if (rows.isEmpty()) {
+            return listOf(emptyList())
+        }
+
+        val firstRow = rows.first()
+        return when (firstRow) {
+            is JsonObject -> {
+                val headers = firstRow.keys.toList()
+                buildList {
+                    add(headers)
+                    rows.forEach { row ->
+                        val rowObject = row as? JsonObject
+                            ?: throw BadRequestException("saveExcel 输入数组元素必须结构一致", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+                        add(headers.map { key -> jsonElementToCellText(rowObject[key]) })
+                    }
+                }
+            }
+
+            is JsonArray -> rows.map { row ->
+                val rowArray = row as? JsonArray
+                    ?: throw BadRequestException("saveExcel 输入数组元素必须结构一致", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+                rowArray.map { cell -> jsonElementToCellText(cell) }
+            }
+
+            else -> throw BadRequestException("saveExcel 输入变量必须是二维数组或对象数组", mapOf("field" to "inputVar", "code" to ErrorCodes.DATA_STEP_CONFIG_INVALID))
+        }
+    }
+
+    private fun serializeSheetRows(sheet: org.apache.poi.ss.usermodel.Sheet, formatter: DataFormatter, useHeader: Boolean): String {
+        val rowValues = sheet.map { row ->
+            val lastCell = max(row.lastCellNum.toInt(), 0)
+            (0 until lastCell).map { cellIndex ->
+                formatter.formatCellValue(row.getCell(cellIndex))
+            }
+        }.filter { row -> row.any { cell -> cell.isNotBlank() } }
+
+        if (rowValues.isEmpty()) {
+            return "[]"
+        }
+
+        val serialized = if (useHeader) {
+            val headers = rowValues.first().mapIndexed { index, value -> value.ifBlank { "column${index + 1}" } }
+            buildJsonArray {
+                rowValues.drop(1).forEach { row ->
+                    add(buildJsonObject {
+                        headers.forEachIndexed { index, key ->
+                            put(key, JsonPrimitive(row.getOrElse(index) { "" }))
+                        }
+                    })
+                }
+            }
+        } else {
+            buildJsonArray {
+                rowValues.forEach { row ->
+                    add(buildJsonArray {
+                        row.forEach { cell -> add(JsonPrimitive(cell)) }
+                    })
+                }
+            }
+        }
+        return serialized.toString()
+    }
+
+    private fun jsonElementToCellText(element: JsonElement?): String {
+        return when (element) {
+            null -> ""
+            is JsonPrimitive -> element.contentOrNull ?: ""
+            else -> element.toString()
+        }
     }
 
     private fun executeTotp(config: JsonObject, outputs: MutableMap<String, String>): StepExecutionResult {
@@ -902,7 +1347,11 @@ class PlaywrightRunSession(
     }
 
     private fun createScope(): ContextScope {
-        val context = browser.newContext()
+        val context = browser.newContext(
+            Browser.NewContextOptions().setPermissions(
+                listOf("clipboard-read", "clipboard-write")
+            )
+        )
         val page = context.newPage().also(::applyPageDefaults)
         return ContextScope(
             id = newId(),
@@ -928,6 +1377,7 @@ class PlaywrightRunSession(
     }
 
     private fun closeScope(scope: ContextScope) {
+        scope.pages.forEach(::stopRequestListenersForPage)
         scope.pages.forEach { page -> runCatching { page.close() } }
         runCatching { scope.context.close() }
     }
@@ -939,6 +1389,21 @@ class PlaywrightRunSession(
 
     private fun findAlias(scope: ContextScope, page: Page): String? {
         return scope.pageAliases.entries.firstOrNull { it.value == page }?.key
+    }
+
+    private fun stopRequestListenersForPage(page: Page) {
+        requestListeners.values
+            .filter { it.page == page }
+            .map { it.listenerId }
+            .forEach(::stopRequestListener)
+    }
+
+    private fun stopRequestListener(listenerId: String) {
+        val state = requestListeners.remove(listenerId) ?: return
+        state.deactivate()
+        runCatching { state.page.offRequest(state.requestHandler) }
+        runCatching { state.page.offResponse(state.responseHandler) }
+        runCatching { state.page.offRequestFailed(state.requestFailedHandler) }
     }
 
     private fun buildArtifact(path: Path, name: String, kind: String): RunArtifact {

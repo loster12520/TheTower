@@ -6,6 +6,8 @@ interface WorkflowTemplate {
   id: string;
   name: string;
   description: string | null;
+  groupName?: string | null;
+  tags?: string[];
   schemaVersion: string;
   steps: Step[];
   otherStep: {
@@ -52,6 +54,114 @@ interface ApiResponse<T> {
   requestId: string;
   data: T | null;
   error: { code: string; message: string } | null;
+}
+
+interface PublishedTemplateSummary {
+  id: string;
+  sourceTemplateId: string;
+  name: string;
+  description: string | null;
+  groupName: string | null;
+  tags: string[];
+  schemaVersion: string;
+  stats: { stepCount: number };
+  sourceUpdatedAt: string;
+  publishedAt: string;
+}
+
+interface Schedule {
+  id: string;
+  templateId: string;
+  templateName: string;
+  triggerType: 'ONE_TIME' | 'INTERVAL';
+  delaySeconds: number | null;
+  intervalSeconds: number | null;
+  enabled: boolean;
+  nextTriggerAt: string | null;
+  lastTriggeredAt: string | null;
+  lastRunId: string | null;
+  lastRunStatus: string | null;
+  lastError: { code: string; message: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface WorkspaceMembership {
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+}
+
+interface UserSession {
+  token: string;
+  userId: string;
+  name: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+  workspaces: WorkspaceMembership[];
+  issuedAt: string;
+  expiresAt: string;
+}
+
+type TemplatePermission = 'OWNER' | 'EDITOR' | 'VIEWER';
+
+interface TemplateCollaborator {
+  userId: string;
+  userName: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  permission: TemplatePermission;
+  invitedAt: string;
+  lastActiveAt: string | null;
+}
+
+interface TemplateAccessRecord {
+  templateId: string;
+  ownerUserId: string;
+  ownerUserName: string;
+  ownerWorkspaceId: string;
+  ownerWorkspaceName: string;
+  collaborators: TemplateCollaborator[];
+}
+
+interface TemplateCollaborationData {
+  templateId: string;
+  ownerUserId: string;
+  ownerUserName: string;
+  ownerWorkspaceId: string;
+  ownerWorkspaceName: string;
+  collaborators: TemplateCollaborator[];
+  currentPermission: TemplatePermission;
+  shared: boolean;
+}
+
+interface TemplatePresenceMember {
+  userId: string;
+  userName: string;
+  email: string;
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+  joinedAt: string;
+  lastSeenAt: string;
+}
+
+interface TemplatePresenceData {
+  templateId: string;
+  members: TemplatePresenceMember[];
+  onlineCount: number;
+  updatedAt: string;
+  latestPatch?: {
+    templateId: string;
+    savedByUserId: string;
+    savedByUserName: string;
+    savedByWorkspaceId: string;
+    savedByWorkspaceName: string;
+    updatedAt: string;
+  } | null;
 }
 
 // 模拟数据存储（内存中）
@@ -321,6 +431,169 @@ let runs: Run[] = [
   }
 ];
 
+let marketTemplates: PublishedTemplateSummary[] = [];
+let schedules: Schedule[] = [];
+let sessions: UserSession[] = [];
+let templateAccessRecords: TemplateAccessRecord[] = [];
+let templatePresenceMap: Record<string, TemplatePresenceMember[]> = {};
+let templateLatestPatchMap: Record<string, TemplatePresenceData['latestPatch']> = {};
+
+const demoUsers = [
+  {
+    id: 'user-alice',
+    name: 'Alice 管理员',
+    email: 'alice@thetower.local',
+    password: 'alice123',
+    workspaces: [
+      { workspaceId: 'ws-alpha', workspaceName: 'Alpha 团队', role: 'OWNER' },
+      { workspaceId: 'ws-beta', workspaceName: 'Beta 团队', role: 'OWNER' },
+    ],
+  },
+  {
+    id: 'user-bob',
+    name: 'Bob 协作者',
+    email: 'bob@thetower.local',
+    password: 'bob123',
+    workspaces: [
+      { workspaceId: 'ws-beta', workspaceName: 'Beta 团队', role: 'EDITOR' },
+    ],
+  },
+];
+
+function getBearerToken(req: any): string | null {
+  const raw = req.headers?.authorization || req.headers?.Authorization;
+  if (!raw || typeof raw !== 'string') {
+    return null;
+  }
+  return raw.replace(/^Bearer\s+/i, '').trim() || null;
+}
+
+function resolveAuthContext(req: any): UserSession | null {
+  const token = getBearerToken(req);
+  if (!token) {
+    return null;
+  }
+
+  const session = sessions.find((item) => item.token === token);
+  if (!session) {
+    return null;
+  }
+
+  const workspaceId = req.headers?.['x-workspace-id'] || req.headers?.['X-Workspace-Id'];
+  const workspace = session.workspaces.find((item) => !workspaceId || item.workspaceId === workspaceId) || session.workspaces[0];
+  return {
+    ...session,
+    workspaceId: workspace.workspaceId,
+    workspaceName: workspace.workspaceName,
+    role: workspace.role,
+  };
+}
+
+function canAccessTemplate(templateId: string, context: UserSession | null): boolean {
+  if (!context) {
+    return true;
+  }
+  const record = templateAccessRecords.find((item) => item.templateId === templateId);
+  if (!record) {
+    return true;
+  }
+  if (record.ownerUserId === context.userId && record.ownerWorkspaceId === context.workspaceId) {
+    return true;
+  }
+  return record.collaborators.some((item) => item.userId === context.userId && item.workspaceId === context.workspaceId);
+}
+
+function assignTemplateOwner(templateId: string, context: UserSession | null) {
+  if (!context || templateAccessRecords.some((item) => item.templateId === templateId)) {
+    return;
+  }
+  templateAccessRecords.push({
+    templateId,
+    ownerUserId: context.userId,
+    ownerUserName: context.name,
+    ownerWorkspaceId: context.workspaceId,
+    ownerWorkspaceName: context.workspaceName,
+    collaborators: [],
+  });
+}
+
+function buildCollaborationData(templateId: string, context: UserSession | null): TemplateCollaborationData {
+  const record = templateAccessRecords.find((item) => item.templateId === templateId);
+  if (!record) {
+    return {
+      templateId,
+      ownerUserId: context?.userId || 'local-user',
+      ownerUserName: context?.name || '本地单机',
+      ownerWorkspaceId: context?.workspaceId || 'local-workspace',
+      ownerWorkspaceName: context?.workspaceName || '默认空间',
+      collaborators: [],
+      currentPermission: 'OWNER',
+      shared: false,
+    };
+  }
+
+  const currentPermission: TemplatePermission = context && record.ownerUserId === context.userId && record.ownerWorkspaceId === context.workspaceId
+    ? 'OWNER'
+    : (record.collaborators.find((item) => context && item.userId === context.userId && item.workspaceId === context.workspaceId)?.permission || 'VIEWER');
+
+  return {
+    templateId,
+    ownerUserId: record.ownerUserId,
+    ownerUserName: record.ownerUserName,
+    ownerWorkspaceId: record.ownerWorkspaceId,
+    ownerWorkspaceName: record.ownerWorkspaceName,
+    collaborators: record.collaborators,
+    currentPermission,
+    shared: record.collaborators.length > 0,
+  };
+}
+
+function cleanupPresence(templateId: string) {
+  const members = templatePresenceMap[templateId] || [];
+  const now = Date.now();
+  templatePresenceMap[templateId] = members.filter((item) => now - new Date(item.lastSeenAt).getTime() <= 30_000);
+}
+
+function buildPresenceData(templateId: string): TemplatePresenceData {
+  cleanupPresence(templateId);
+  const members = (templatePresenceMap[templateId] || []).slice().sort((left, right) => {
+    const workspaceCompare = left.workspaceName.localeCompare(right.workspaceName, 'zh-CN');
+    return workspaceCompare !== 0 ? workspaceCompare : left.userName.localeCompare(right.userName, 'zh-CN');
+  });
+  return {
+    templateId,
+    members,
+    onlineCount: members.length,
+    updatedAt: new Date().toISOString(),
+    latestPatch: templateLatestPatchMap[templateId] || null,
+  };
+}
+
+function heartbeatPresence(templateId: string, context: UserSession): TemplatePresenceData {
+  cleanupPresence(templateId);
+  const members = templatePresenceMap[templateId] || [];
+  const now = new Date().toISOString();
+  const nextMember: TemplatePresenceMember = {
+    userId: context.userId,
+    userName: context.name,
+    email: context.email,
+    workspaceId: context.workspaceId,
+    workspaceName: context.workspaceName,
+    role: context.role,
+    joinedAt: members.find((item) => item.userId === context.userId && item.workspaceId === context.workspaceId)?.joinedAt || now,
+    lastSeenAt: now,
+  };
+  templatePresenceMap[templateId] = members
+    .filter((item) => !(item.userId === context.userId && item.workspaceId === context.workspaceId))
+    .concat(nextMember);
+  return buildPresenceData(templateId);
+}
+
+function leavePresence(templateId: string, context: UserSession) {
+  const members = templatePresenceMap[templateId] || [];
+  templatePresenceMap[templateId] = members.filter((item) => !(item.userId === context.userId && item.workspaceId === context.workspaceId));
+}
+
 // Mock 配置导出
 export default {
   // ========== Health API ==========
@@ -328,17 +601,70 @@ export default {
     res.json(successResponse({ status: 'ok' }));
   },
 
+  'POST /api/v1/auth/login': (req: any, res: any) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '').trim();
+    const user = demoUsers.find((item) => item.email === email && item.password === password);
+    if (!user) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '账号或密码错误'));
+      return;
+    }
+    const workspace = user.workspaces.find((item) => item.workspaceId === req.body?.workspaceId) || user.workspaces[0];
+    const session: UserSession = {
+      token: `session-${generateId()}`,
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      workspaceId: workspace.workspaceId,
+      workspaceName: workspace.workspaceName,
+      role: workspace.role,
+      workspaces: user.workspaces,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    sessions = [session, ...sessions.filter((item) => item.userId !== user.id)];
+    res.json(successResponse(session));
+  },
+
+  'POST /api/v1/auth/logout': (req: any, res: any) => {
+    const token = getBearerToken(req);
+    sessions = sessions.filter((item) => item.token !== token);
+    res.json(successResponse({ loggedOut: true }));
+  },
+
+  'GET /api/v1/me': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+    res.json(successResponse(context));
+  },
+
+  'GET /api/v1/workspaces': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+    res.json(successResponse({ items: context.workspaces }));
+  },
+
   // ========== Template API ==========
   
   // 获取模板列表
   'GET /api/v1/templates': (req: any, res: any) => {
     const includeLastRun = req.query.includeLastRun !== 'false';
+    const context = resolveAuthContext(req);
+    const visibleTemplates = templates.filter((template) => canAccessTemplate(template.id, context));
     
     // 返回摘要列表（不包含完整 steps）
-    const items = templates.map(t => ({
+    const items = visibleTemplates.map(t => ({
       id: t.id,
       name: t.name,
       description: t.description,
+      groupName: t.groupName || null,
+      tags: t.tags || [],
       schemaVersion: t.schemaVersion,
       updatedAt: t.updatedAt,
       stats: t.stats,
@@ -351,11 +677,14 @@ export default {
   // 创建模板
   'POST /api/v1/templates': (req: any, res: any) => {
     const body = req.body;
+    const context = resolveAuthContext(req);
     const now = new Date().toISOString();
     const newTemplate: WorkflowTemplate = {
       id: `tpl-${generateId()}`,
       name: body.name || '未命名模板',
       description: body.description || null,
+      groupName: body.groupName || null,
+      tags: body.tags || [],
       schemaVersion: body.schemaVersion || '0.0.8',
       steps: body.steps || [],
       otherStep: body.otherStep || { nodes: [], edges: [] },
@@ -366,13 +695,15 @@ export default {
     };
     
     templates.push(newTemplate);
+    assignTemplateOwner(newTemplate.id, context);
     res.json(successResponse(newTemplate));
   },
 
   // 获取模板详情
   'GET /api/v1/templates/:id': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
     const template = templates.find(t => t.id === req.params.id);
-    if (!template) {
+    if (!template || !canAccessTemplate(req.params.id, context)) {
       res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
       return;
     }
@@ -381,8 +712,9 @@ export default {
 
   // 更新模板元信息
   'PATCH /api/v1/templates/:id': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
     const template = templates.find(t => t.id === req.params.id);
-    if (!template) {
+    if (!template || !canAccessTemplate(req.params.id, context)) {
       res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
       return;
     }
@@ -394,15 +726,30 @@ export default {
     if (body.description !== undefined) {
       template.description = body.description;
     }
+    if (body.groupName !== undefined) {
+      template.groupName = body.groupName;
+    }
+    if (body.tags !== undefined) {
+      template.tags = body.tags;
+    }
     template.updatedAt = new Date().toISOString();
+    templateLatestPatchMap[req.params.id] = {
+      templateId: req.params.id,
+      savedByUserId: context?.userId || 'local-user',
+      savedByUserName: context?.name || '本地单机',
+      savedByWorkspaceId: context?.workspaceId || 'local-workspace',
+      savedByWorkspaceName: context?.workspaceName || '默认空间',
+      updatedAt: template.updatedAt,
+    };
     
     res.json(successResponse(template));
   },
 
   // 保存模板步骤
   'PUT /api/v1/templates/:id': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
     const template = templates.find(t => t.id === req.params.id);
-    if (!template) {
+    if (!template || !canAccessTemplate(req.params.id, context)) {
       res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
       return;
     }
@@ -419,13 +766,258 @@ export default {
 
   // 删除模板
   'DELETE /api/v1/templates/:id': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
     const index = templates.findIndex(t => t.id === req.params.id);
-    if (index === -1) {
+    if (index === -1 || !canAccessTemplate(req.params.id, context)) {
       res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
       return;
     }
     
     templates.splice(index, 1);
+    templateAccessRecords = templateAccessRecords.filter((item) => item.templateId !== req.params.id);
+    delete templatePresenceMap[req.params.id];
+    delete templateLatestPatchMap[req.params.id];
+    res.json(successResponse({ deleted: true }));
+  },
+
+  'GET /api/v1/templates/:id/collaboration': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    const template = templates.find(t => t.id === req.params.id);
+    if (!template || !canAccessTemplate(req.params.id, context)) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
+      return;
+    }
+    res.json(successResponse(buildCollaborationData(req.params.id, context)));
+  },
+
+  'POST /api/v1/templates/:id/collaboration/share': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+
+    const template = templates.find(t => t.id === req.params.id);
+    if (!template || !canAccessTemplate(req.params.id, context)) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
+      return;
+    }
+
+    const existing = templateAccessRecords.find((item) => item.templateId === req.params.id);
+    if (existing && (existing.ownerUserId !== context.userId || existing.ownerWorkspaceId !== context.workspaceId)) {
+      res.status(403).json(errorResponse('FORBIDDEN', '只有模板拥有者可以分享模板'));
+      return;
+    }
+
+    const targetUser = demoUsers.find((item) => item.email === String(req.body?.email || '').trim().toLowerCase());
+    if (!targetUser) {
+      res.status(400).json(errorResponse('BAD_REQUEST', '协作用户不存在'));
+      return;
+    }
+
+    const targetWorkspace = targetUser.workspaces.find((item) => item.workspaceId !== context.workspaceId) || targetUser.workspaces[0];
+    const nextCollaborator: TemplateCollaborator = {
+      userId: targetUser.id,
+      userName: targetUser.name,
+      email: targetUser.email,
+      workspaceId: targetWorkspace.workspaceId,
+      workspaceName: targetWorkspace.workspaceName,
+      permission: req.body?.permission || 'EDITOR',
+      invitedAt: new Date().toISOString(),
+      lastActiveAt: null,
+    };
+
+    const baseRecord: TemplateAccessRecord = existing || {
+      templateId: req.params.id,
+      ownerUserId: context.userId,
+      ownerUserName: context.name,
+      ownerWorkspaceId: context.workspaceId,
+      ownerWorkspaceName: context.workspaceName,
+      collaborators: [],
+    };
+
+    templateAccessRecords = templateAccessRecords.filter((item) => item.templateId !== req.params.id);
+    templateAccessRecords.push({
+      ...baseRecord,
+      collaborators: baseRecord.collaborators
+        .filter((item) => !(item.userId === nextCollaborator.userId && item.workspaceId === nextCollaborator.workspaceId))
+        .concat(nextCollaborator),
+    });
+    res.json(successResponse(buildCollaborationData(req.params.id, context)));
+  },
+
+  'GET /api/v1/templates/:id/collaboration/presence': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    const template = templates.find(t => t.id === req.params.id);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+    if (!template || !canAccessTemplate(req.params.id, context)) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
+      return;
+    }
+    res.json(successResponse(buildPresenceData(req.params.id)));
+  },
+
+  'POST /api/v1/templates/:id/collaboration/presence/heartbeat': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    const template = templates.find(t => t.id === req.params.id);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+    if (!template || !canAccessTemplate(req.params.id, context)) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.params.id} 不存在`));
+      return;
+    }
+    res.json(successResponse(heartbeatPresence(req.params.id, context)));
+  },
+
+  'DELETE /api/v1/templates/:id/collaboration/presence': (req: any, res: any) => {
+    const context = resolveAuthContext(req);
+    if (!context) {
+      res.status(401).json(errorResponse('UNAUTHORIZED', '请先登录'));
+      return;
+    }
+    leavePresence(req.params.id, context);
+    res.json(successResponse({ deleted: true }));
+  },
+
+  'GET /api/v1/market/templates': (req: any, res: any) => {
+    res.json(successResponse({ items: marketTemplates }));
+  },
+
+  'POST /api/v1/market/templates/publish': (req: any, res: any) => {
+    const template = templates.find(t => t.id === req.body.templateId);
+    if (!template) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.body.templateId} 不存在`));
+      return;
+    }
+
+    const published: PublishedTemplateSummary = {
+      id: `market-${generateId()}`,
+      sourceTemplateId: template.id,
+      name: template.name,
+      description: template.description,
+      groupName: template.groupName || null,
+      tags: template.tags || [],
+      schemaVersion: template.schemaVersion,
+      stats: template.stats,
+      sourceUpdatedAt: template.updatedAt,
+      publishedAt: new Date().toISOString(),
+    };
+    marketTemplates = [published, ...marketTemplates];
+    res.json(successResponse(published));
+  },
+
+  'POST /api/v1/market/templates/:id/import': (req: any, res: any) => {
+    const published = marketTemplates.find(t => t.id === req.params.id);
+    if (!published) {
+      res.status(404).json(errorResponse('NOT_FOUND', `市场模板 ${req.params.id} 不存在`));
+      return;
+    }
+
+    const source = templates.find(t => t.id === published.sourceTemplateId);
+    if (!source) {
+      res.status(404).json(errorResponse('NOT_FOUND', `源模板 ${published.sourceTemplateId} 不存在`));
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const imported: WorkflowTemplate = {
+      ...source,
+      id: `tpl-${generateId()}`,
+      name: req.body?.name || `${published.name} 导入副本`,
+      createdAt: now,
+      updatedAt: now,
+      lastRun: null,
+    };
+    templates.push(imported);
+    res.json(successResponse(imported));
+  },
+
+  'GET /api/v1/schedules': (req: any, res: any) => {
+    res.json(successResponse({ items: schedules }));
+  },
+
+  'POST /api/v1/schedules': (req: any, res: any) => {
+    const template = templates.find(t => t.id === req.body.templateId);
+    if (!template) {
+      res.status(404).json(errorResponse('NOT_FOUND', `模板 ${req.body.templateId} 不存在`));
+      return;
+    }
+
+    const now = new Date();
+    const triggerType = req.body.triggerType || 'ONE_TIME';
+    const delaySeconds = triggerType === 'ONE_TIME' ? Number(req.body.delaySeconds || 1) : null;
+    const intervalSeconds = triggerType === 'INTERVAL' ? Number(req.body.intervalSeconds || 1) : null;
+    const nextTriggerAt = new Date(now.getTime() + (triggerType === 'INTERVAL' ? intervalSeconds! : delaySeconds!) * 1000).toISOString();
+    const schedule: Schedule = {
+      id: `schedule-${generateId()}`,
+      templateId: template.id,
+      templateName: template.name,
+      triggerType,
+      delaySeconds,
+      intervalSeconds,
+      enabled: req.body.enabled !== false,
+      nextTriggerAt,
+      lastTriggeredAt: null,
+      lastRunId: null,
+      lastRunStatus: null,
+      lastError: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    schedules = [schedule, ...schedules];
+
+    setTimeout(() => {
+      if (!schedule.enabled) {
+        return;
+      }
+      const run: Run = {
+        id: `run-${generateId()}`,
+        templateId: template.id,
+        status: 'SUCCEEDED',
+        currentStepId: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: null,
+      };
+      runs.unshift(run);
+      schedule.lastTriggeredAt = new Date().toISOString();
+      schedule.lastRunId = run.id;
+      schedule.lastRunStatus = run.status;
+      schedule.updatedAt = new Date().toISOString();
+      if (schedule.triggerType === 'ONE_TIME') {
+        schedule.enabled = false;
+        schedule.nextTriggerAt = null;
+      } else {
+        schedule.nextTriggerAt = new Date(Date.now() + (schedule.intervalSeconds || 1) * 1000).toISOString();
+      }
+    }, (triggerType === 'INTERVAL' ? intervalSeconds! : delaySeconds!) * 1000);
+
+    res.json(successResponse(schedule));
+  },
+
+  'PATCH /api/v1/schedules/:id': (req: any, res: any) => {
+    const schedule = schedules.find(item => item.id === req.params.id);
+    if (!schedule) {
+      res.status(404).json(errorResponse('NOT_FOUND', `调度任务 ${req.params.id} 不存在`));
+      return;
+    }
+    if (req.body.enabled !== undefined) {
+      schedule.enabled = Boolean(req.body.enabled);
+      schedule.nextTriggerAt = schedule.enabled
+        ? new Date(Date.now() + ((schedule.triggerType === 'INTERVAL' ? schedule.intervalSeconds : schedule.delaySeconds) || 1) * 1000).toISOString()
+        : null;
+    }
+    schedule.updatedAt = new Date().toISOString();
+    res.json(successResponse(schedule));
+  },
+
+  'DELETE /api/v1/schedules/:id': (req: any, res: any) => {
+    schedules = schedules.filter(item => item.id !== req.params.id);
     res.json(successResponse({ deleted: true }));
   },
 

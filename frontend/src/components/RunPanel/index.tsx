@@ -14,6 +14,8 @@ import {
   Descriptions,
   Modal,
   Collapse,
+  Input,
+  Switch,
 } from 'antd';
 import { CloseOutlined, SyncOutlined, FullscreenOutlined, DesktopOutlined, LinkOutlined, StopOutlined, CaretRightOutlined, StepForwardOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import { runStore } from '@/stores/runStore';
@@ -33,7 +35,12 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
   const { currentRun, logs, events, stepStatusMap, latestOutputs, latestArtifacts } = runStore;
   const latestFailedStepPath = runStore.latestFailedStepPath;
   const [previewOpen, setPreviewOpen] = React.useState(false);
-  const debugVariables = runStore.latestDebugContext?.variables || {};
+  const [remoteText, setRemoteText] = React.useState('');
+  const [clearBeforeType, setClearBeforeType] = React.useState(false);
+  const previewImageRef = React.useRef<HTMLImageElement | null>(null);
+  const selectedDebugHistory = runStore.selectedDebugHistoryEntry;
+  const inspectedDebugContext = selectedDebugHistory || runStore.latestDebugContext;
+  const debugVariables = selectedDebugHistory?.variables || runStore.latestDebugContext?.variables || {};
   const debugStatus = runStore.debugSession?.status;
   const currentStepDisplayName = runStore.currentStepDisplayName || (runStore.currentStepId ? `步骤 ${runStore.currentStepId.slice(-8)}` : '-');
 
@@ -88,6 +95,40 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
     }
   };
 
+  const handlePreviewClick = async (event: React.MouseEvent<HTMLImageElement>) => {
+    if (!runStore.latestDebugFrame || !previewImageRef.current) {
+      return;
+    }
+
+    const rect = previewImageRef.current.getBoundingClientRect();
+    const ratioX = runStore.latestDebugFrame.width / rect.width;
+    const ratioY = runStore.latestDebugFrame.height / rect.height;
+    const x = Math.round((event.clientX - rect.left) * ratioX);
+    const y = Math.round((event.clientY - rect.top) * ratioY);
+    const success = await runStore.remoteClickPreview(x, y);
+    if (success) {
+      message.success(`已远程点击 (${x}, ${y})`);
+    } else if (runStore.error) {
+      message.error(runStore.error);
+    }
+  };
+
+  const handleRemoteType = async () => {
+    const text = remoteText.trim();
+    if (!text) {
+      message.warning('请输入要发送到当前焦点的文本');
+      return;
+    }
+
+    const success = await runStore.remoteTypeText(text, clearBeforeType);
+    if (success) {
+      message.success(clearBeforeType ? '已清空并输入文本' : '已输入文本');
+      setRemoteText('');
+    } else if (runStore.error) {
+      message.error(runStore.error);
+    }
+  };
+
   // 获取运行状态标签
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -133,23 +174,36 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
       children: (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Card title="变量检查器" size="small">
-            {runStore.latestDebugContext ? (
+            {inspectedDebugContext ? (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                {selectedDebugHistory ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`正在查看 ${new Date(selectedDebugHistory.ts).toLocaleTimeString()} 的历史快照`}
+                    description={selectedDebugHistory.reason || '可回看该时刻的变量快照与运行位置。'}
+                    action={
+                      <Button size="small" type="link" onClick={() => runStore.setSelectedDebugHistory(null)}>
+                        回到最新
+                      </Button>
+                    }
+                  />
+                ) : null}
                 <Descriptions column={1} size="small" styles={{ label: { width: 110 } }}>
                   <Descriptions.Item label="当前步骤">
-                    {runStore.latestDebugContext.stepId || '-'}
+                    {inspectedDebugContext.stepId || '-'}
                   </Descriptions.Item>
                   <Descriptions.Item label="当前路径">
-                    {runStore.latestDebugContext.stepPath.join(' / ') || '-'}
+                    {inspectedDebugContext.stepPath.join(' / ') || '-'}
                   </Descriptions.Item>
                   <Descriptions.Item label="页面别名">
-                    {runStore.latestDebugContext.pageAlias || '-'}
+                    {inspectedDebugContext.pageAlias || '-'}
                   </Descriptions.Item>
                   <Descriptions.Item label="上下文">
-                    {runStore.latestDebugContext.contextId || '-'}
+                    {inspectedDebugContext.contextId || '-'}
                   </Descriptions.Item>
                   <Descriptions.Item label="更新时间">
-                    {runStore.latestDebugContext.updatedAt ? new Date(runStore.latestDebugContext.updatedAt).toLocaleString() : '-'}
+                    {'updatedAt' in inspectedDebugContext && inspectedDebugContext.updatedAt ? new Date(inspectedDebugContext.updatedAt).toLocaleString() : ('ts' in inspectedDebugContext ? new Date(inspectedDebugContext.ts).toLocaleString() : '-')}
                   </Descriptions.Item>
                 </Descriptions>
                 {Object.keys(debugVariables).length > 0 ? (
@@ -167,6 +221,49 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
               </Space>
             ) : (
               <Empty description="尚未收到调试上下文" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </Card>
+
+          <Card
+            title="时间旅行调试"
+            size="small"
+            extra={runStore.debugHistory.length > 0 ? <Text type="secondary">{runStore.debugHistory.length} 个快照</Text> : null}
+            styles={runPanelScrollableCardStyles}
+          >
+            {runStore.debugHistory.length > 0 ? (
+              <List
+                size="small"
+                dataSource={runStore.debugHistory.slice().reverse()}
+                renderItem={(entry) => {
+                  const isSelected = selectedDebugHistory?.id === entry.id;
+                  return (
+                    <List.Item
+                      style={{
+                        cursor: 'pointer',
+                        borderRadius: 8,
+                        paddingInline: 10,
+                        background: isSelected ? '#eef6ff' : 'transparent',
+                      }}
+                      onClick={() => runStore.setSelectedDebugHistory(isSelected ? null : entry.id)}
+                    >
+                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                        <Space wrap>
+                          <Tag color={entry.status === 'PAUSED' ? 'warning' : entry.status === 'FAILED' ? 'error' : entry.status === 'SUCCEEDED' ? 'success' : 'processing'}>
+                            {entry.status}
+                          </Tag>
+                          <Tag>{entry.source}</Tag>
+                          <Text type="secondary">{new Date(entry.ts).toLocaleTimeString()}</Text>
+                        </Space>
+                        <Text strong>{entry.stepName || entry.stepId || '-'}</Text>
+                        <Text type="secondary">{entry.stepPath.join(' / ') || '-'}</Text>
+                        {entry.reason ? <Text>{entry.reason}</Text> : null}
+                      </Space>
+                    </List.Item>
+                  );
+                }}
+              />
+            ) : (
+              <Empty description="运行后这里会沉淀关键步骤、暂停点和变量快照" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
           </Card>
 
@@ -478,14 +575,42 @@ const RunPanel: React.FC<RunPanelProps> = observer(({ onClose }) => {
                     </Space>
                   </div>
                   <img
+                    ref={previewImageRef}
                     src={runStore.debugPreviewUrl}
                     alt="调试预览"
+                    onClick={handlePreviewClick}
                     style={{ display: 'block', width: '100%', maxHeight: 220, objectFit: 'contain', background: '#020617' }}
                   />
                 </div>
               ) : (
                 <Empty description="调试运行已启动，等待预览帧..." image={Empty.PRESENTED_IMAGE_SIMPLE} />
               )}
+
+              <Card size="small" title="远程操控">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="点击上方预览可向当前页面发送一次点击"
+                    description="坐标会按当前预览帧尺寸换算到浏览器页面；适合弹窗确认、按钮点选等轻量操作。"
+                  />
+                  <Input.TextArea
+                    rows={2}
+                    value={remoteText}
+                    onChange={(e) => setRemoteText(e.target.value)}
+                    placeholder="向当前焦点输入文本，例如验证码或临时调试值"
+                  />
+                  <Space wrap>
+                    <Space size={8}>
+                      <Switch checked={clearBeforeType} onChange={setClearBeforeType} />
+                      <Text>输入前先清空当前焦点</Text>
+                    </Space>
+                    <Button type="primary" onClick={handleRemoteType}>
+                      发送文本
+                    </Button>
+                  </Space>
+                </Space>
+              </Card>
             </Space>
           </Card>
 

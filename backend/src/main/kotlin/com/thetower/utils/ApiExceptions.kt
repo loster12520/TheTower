@@ -19,6 +19,15 @@ class BadRequestException(
     details?.filterKeys { it != "code" }
 )
 
+class UnauthorizedException(message: String) :
+    ApiException(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, message)
+
+class ForbiddenException(message: String) :
+    ApiException(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, message)
+
+class WorkspaceForbiddenException(message: String) :
+    ApiException(HttpStatusCode.Forbidden, ErrorCodes.WORKSPACE_FORBIDDEN, message)
+
 class InvalidStepConfigException(
     message: String,
     details: Map<String, String>? = null

@@ -5,10 +5,20 @@ import type {
   HealthResponse,
   WorkflowTemplate,
   TemplateSummary,
+  PublishedTemplateSummary,
+  Schedule,
+  UserSession,
+  WorkspaceMembership,
+  TemplateCollaborationData,
+  TemplatePresenceData,
+  TemplatePermission,
+  BatchDeleteTemplatesData,
   Run,
+  RunLaunchOptions,
   RunDebugOptions,
   RunDebugSession,
   RunDebugContextSnapshot,
+  DebugRemoteControlData,
 } from '@/models';
 import { appLogger, runtimeConfig } from '@/config/runtime';
 
@@ -42,14 +52,19 @@ apiClient.interceptors.request.use(
     const requestId = createRequestId();
     config.headers[REQUEST_ID_HEADER] = requestId;
 
-    if (runtimeConfig.auth.enabled) {
-      const token = typeof window !== 'undefined'
-        ? window.localStorage.getItem(runtimeConfig.auth.tokenStorageKey)
-        : null;
+    const token = typeof window !== 'undefined'
+      ? window.localStorage.getItem(runtimeConfig.auth.tokenStorageKey)
+      : null;
+    const workspaceId = typeof window !== 'undefined'
+      ? window.localStorage.getItem(runtimeConfig.auth.workspaceStorageKey)
+      : null;
 
-      if (token && token.trim().length > 0) {
-        config.headers[runtimeConfig.auth.tokenHeader] = token;
-      }
+    if (token && token.trim().length > 0) {
+      config.headers[runtimeConfig.auth.tokenHeader] = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+    }
+
+    if (workspaceId && workspaceId.trim().length > 0) {
+      config.headers['X-Workspace-Id'] = workspaceId;
     }
 
     appLogger.debug(
@@ -152,8 +167,8 @@ export const healthApi = {
 // ==================== Template API ====================
 export const templateApi = {
   // 获取模板列表
-  list(includeLastRun: boolean = true): Promise<ApiResponse<{ items: TemplateSummary[] }>> {
-    return request.get('/templates', { includeLastRun });
+  list(includeLastRun: boolean = true, keyword?: string, groupName?: string, tag?: string): Promise<ApiResponse<{ items: TemplateSummary[] }>> {
+    return request.get('/templates', { includeLastRun, keyword, groupName, tag });
   },
   
   // 获取模板详情
@@ -165,6 +180,8 @@ export const templateApi = {
   create(data: {
     name: string;
     description?: string | null;
+    groupName?: string | null;
+    tags?: string[];
     schemaVersion: string;
     steps: unknown[];
     otherStep: { nodes: unknown[]; edges: unknown[] };
@@ -173,7 +190,7 @@ export const templateApi = {
   },
   
   // 更新模板元信息
-  updateMeta(id: string, data: { name?: string; description?: string | null }): Promise<ApiResponse<WorkflowTemplate>> {
+  updateMeta(id: string, data: { name?: string; description?: string | null; groupName?: string | null; tags?: string[] }): Promise<ApiResponse<WorkflowTemplate>> {
     return request.patch(`/templates/${id}`, data);
   },
   
@@ -190,13 +207,95 @@ export const templateApi = {
   delete(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
     return request.delete(`/templates/${id}`);
   },
+
+  clone(id: string, data?: { name?: string }): Promise<ApiResponse<WorkflowTemplate>> {
+    return request.post(`/templates/${id}/clone`, data || {});
+  },
+
+  batchDelete(ids: string[]): Promise<ApiResponse<BatchDeleteTemplatesData>> {
+    return request.post('/templates/batch-delete', { ids });
+  },
+};
+
+export const templateMarketApi = {
+  list(keyword?: string): Promise<ApiResponse<{ items: PublishedTemplateSummary[] }>> {
+    return request.get('/market/templates', { keyword });
+  },
+
+  publish(templateId: string): Promise<ApiResponse<PublishedTemplateSummary>> {
+    return request.post('/market/templates/publish', { templateId });
+  },
+
+  importTemplate(id: string, data?: { name?: string }): Promise<ApiResponse<WorkflowTemplate>> {
+    return request.post(`/market/templates/${id}/import`, data || {});
+  },
+};
+
+export const scheduleApi = {
+  list(templateId?: string, enabled?: boolean): Promise<ApiResponse<{ items: Schedule[] }>> {
+    return request.get('/schedules', { templateId, enabled });
+  },
+
+  create(data: { templateId: string; triggerType: 'ONE_TIME' | 'INTERVAL'; delaySeconds?: number; intervalSeconds?: number; enabled?: boolean }): Promise<ApiResponse<Schedule>> {
+    return request.post('/schedules', data);
+  },
+
+  update(id: string, data: { triggerType?: 'ONE_TIME' | 'INTERVAL'; delaySeconds?: number; intervalSeconds?: number; enabled?: boolean }): Promise<ApiResponse<Schedule>> {
+    return request.patch(`/schedules/${id}`, data);
+  },
+
+  delete(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+    return request.delete(`/schedules/${id}`);
+  },
+};
+
+export const authApi = {
+  login(data: { email: string; password: string; workspaceId?: string }): Promise<ApiResponse<UserSession>> {
+    return request.post('/auth/login', data);
+  },
+
+  logout(): Promise<ApiResponse<{ loggedOut: boolean }>> {
+    return request.post('/auth/logout');
+  },
+
+  me(): Promise<ApiResponse<UserSession>> {
+    return request.get('/me');
+  },
+};
+
+export const workspaceApi = {
+  list(): Promise<ApiResponse<{ items: WorkspaceMembership[] }>> {
+    return request.get('/workspaces');
+  },
+};
+
+export const collaborationApi = {
+  get(templateId: string): Promise<ApiResponse<TemplateCollaborationData>> {
+    return request.get(`/templates/${templateId}/collaboration`);
+  },
+
+  share(templateId: string, data: { email: string; permission: TemplatePermission }): Promise<ApiResponse<TemplateCollaborationData>> {
+    return request.post(`/templates/${templateId}/collaboration/share`, data);
+  },
+
+  getPresence(templateId: string): Promise<ApiResponse<TemplatePresenceData>> {
+    return request.get(`/templates/${templateId}/collaboration/presence`);
+  },
+
+  heartbeatPresence(templateId: string): Promise<ApiResponse<TemplatePresenceData>> {
+    return request.post(`/templates/${templateId}/collaboration/presence/heartbeat`);
+  },
+
+  leavePresence(templateId: string): Promise<ApiResponse<{ deleted: boolean }>> {
+    return request.delete(`/templates/${templateId}/collaboration/presence`);
+  },
 };
 
 // ==================== Run API ====================
 export const runApi = {
   // 发起运行
-  start(templateId: string, dryRun: boolean = false, debug?: RunDebugOptions): Promise<ApiResponse<{ run: Run; wsUrl: string; debug?: RunDebugSession | null }>> {
-    return request.post('/runs', { templateId, dryRun, debug });
+  start(templateId: string, dryRun: boolean = false, debug?: RunDebugOptions, launchOptions?: RunLaunchOptions): Promise<ApiResponse<{ run: Run; wsUrl: string; debug?: RunDebugSession | null }>> {
+    return request.post('/runs', { templateId, dryRun, debug, launchOptions });
   },
   
   // 取消运行
@@ -227,6 +326,10 @@ export const runApi = {
 
   closeDebug(id: string): Promise<ApiResponse<RunDebugSession>> {
     return request.post(`/runs/${id}/debug/close`);
+  },
+
+  remoteControlDebug(id: string, data: { action: 'clickPreview' | 'typeText'; x?: number; y?: number; text?: string; clearBeforeType?: boolean }): Promise<ApiResponse<DebugRemoteControlData>> {
+    return request.post(`/runs/${id}/debug/remote-control`, data);
   },
   
   // 删除运行记录

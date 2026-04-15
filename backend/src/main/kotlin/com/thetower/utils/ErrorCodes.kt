@@ -2,6 +2,9 @@ package com.thetower.utils
 
 object ErrorCodes {
     const val BAD_REQUEST = "TT-0400-001"
+    const val UNAUTHORIZED = "TT-0401-001"
+    const val FORBIDDEN = "TT-0403-001"
+    const val WORKSPACE_FORBIDDEN = "TT-0403-002"
     const val INVALID_STEP_CONFIG = "TT-0400-002"
     const val STEP_PARAMETER_MISSING = "TT-0400-201"
     const val ELEMENT_TARGET_INVALID = "TT-0400-202"

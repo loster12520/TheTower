@@ -152,6 +152,47 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
                 validateNonBlankText(step, "saveAs")
             }
 
+            "saveData" -> {
+                validateNonBlankText(step, "content")
+                validateNonBlankText(step, "fileName")
+            }
+
+            "saveExcel" -> {
+                validateNonBlankText(step, "inputVar")
+                validateNonBlankText(step, "fileName")
+            }
+
+            "importExcel" -> {
+                validateNonBlankText(step, "path")
+                validateNonBlankText(step, "saveAs")
+            }
+
+            "listenRequestTrigger" -> {
+                validateNonBlankText(step, "listenerId")
+                validateNonBlankText(step, "urlPattern")
+                validateEnum(step, "matchType", setOf("contains", "equals"))
+            }
+
+            "listenRequestResult" -> {
+                validateNonBlankText(step, "listenerId")
+                validateNonBlankText(step, "saveAs")
+            }
+
+            "stopPageListen" -> {
+                val stopAll = step.data.config["stopAll"]?.jsonPrimitive?.booleanOrNull ?: false
+                if (!stopAll) {
+                    validateNonBlankText(step, "listenerId")
+                }
+            }
+
+            "extractActiveElement" -> {
+                validateNonBlankText(step, "saveAs")
+            }
+
+            "getClipboardText" -> {
+                validateNonBlankText(step, "saveAs")
+            }
+
             "keyboardPress" -> {
                 validateNonBlankText(step, "key")
             }
@@ -182,7 +223,38 @@ internal fun validateStepTree(steps: List<StepNode>, loopDepth: Int = 0) {
             }
         }
 
+        if (step.data.config["breakpoint"]?.jsonPrimitive?.booleanOrNull == true) {
+            validateConditionField(step, "breakpointCondition", required = false)
+        }
+
         validateElementOrder(step)
+    }
+}
+
+private fun validateConditionField(step: StepNode, field: String, required: Boolean) {
+    val condition = step.data.config[field]?.jsonObject
+    if (condition == null) {
+        if (required) {
+            throw InvalidStepConfigException("缺少 $field 配置", mapOf("stepId" to step.id, "field" to field))
+        }
+        return
+    }
+
+    val left = condition["left"]?.jsonPrimitive?.contentOrNull?.trim()
+    val op = condition["op"]?.jsonPrimitive?.contentOrNull?.trim()
+    val right = condition["right"]?.jsonPrimitive?.contentOrNull?.trim()
+
+    if (left.isNullOrEmpty()) {
+        throw InvalidStepConfigException("$field.left 不能为空", mapOf("stepId" to step.id, "field" to "$field.left"))
+    }
+
+    val supportedOps = setOf("exists", "notExists", "contains", "notContains", "equals", "notEquals", "lt", "lte", "gt", "gte")
+    if (op.isNullOrEmpty() || op !in supportedOps) {
+        throw InvalidStepConfigException("$field.op 不支持: ${op ?: ""}", mapOf("stepId" to step.id, "field" to "$field.op"))
+    }
+
+    if (op !in setOf("exists", "notExists") && right.isNullOrEmpty()) {
+        throw InvalidStepConfigException("$field.right 不能为空", mapOf("stepId" to step.id, "field" to "$field.right"))
     }
 }
 
@@ -241,13 +313,13 @@ private fun validateEnum(step: StepNode, field: String, allowedValues: Set<Strin
     }
 }
 
-internal fun evaluateCondition(config: JsonObject, outputs: Map<String, String>): Boolean {
-    val condition = config["condition"]?.jsonObject
-        ?: throw InvalidStepConfigException("缺少 condition 配置", mapOf("field" to "condition"))
+internal fun evaluateCondition(config: JsonObject, outputs: Map<String, String>, field: String = "condition"): Boolean {
+    val condition = config[field]?.jsonObject
+        ?: throw InvalidStepConfigException("缺少 $field 配置", mapOf("field" to field))
 
     val left = resolveConditionValue(condition["left"], outputs)
     val op = condition["op"]?.jsonPrimitive?.content
-        ?: throw InvalidStepConfigException("缺少 condition.op 配置", mapOf("field" to "condition.op"))
+        ?: throw InvalidStepConfigException("缺少 $field.op 配置", mapOf("field" to "$field.op"))
     val right = resolveConditionValue(condition["right"], outputs)
 
     return when (op) {
@@ -261,7 +333,7 @@ internal fun evaluateCondition(config: JsonObject, outputs: Map<String, String>)
         "lte" -> compareNumeric(left, right) <= 0
         "gt" -> compareNumeric(left, right) > 0
         "gte" -> compareNumeric(left, right) >= 0
-        else -> throw InvalidStepConfigException("不支持的 condition.op: $op", mapOf("field" to "condition.op"))
+        else -> throw InvalidStepConfigException("不支持的 $field.op: $op", mapOf("field" to "$field.op"))
     }
 }
 

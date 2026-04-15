@@ -72,7 +72,7 @@ internal class DebugExecutionGate {
 
     fun currentStepPath(runId: String): List<String> = controls[runId]?.latestStepPath ?: emptyList()
 
-    fun preparePause(runId: String, stepId: String, stepPath: List<String>): DebugPauseReason? {
+    fun preparePause(runId: String, stepId: String, stepPath: List<String>, breakpointMatched: Boolean = stepId in (controls[runId]?.breakpoints ?: emptySet())): DebugPauseReason? {
         val control = controls[runId] ?: return null
         synchronized(control.lock) {
             control.latestStepId = stepId
@@ -80,7 +80,7 @@ internal class DebugExecutionGate {
             val reasonType = when {
                 control.pauseOnStartPending -> DebugPauseReasonType.PAUSE_ON_START
                 control.pauseAfterCurrentStep -> DebugPauseReasonType.STEP_COMPLETE
-                stepId in control.breakpoints && control.skipBreakpointStepId != stepId -> DebugPauseReasonType.BREAKPOINT
+                breakpointMatched && control.skipBreakpointStepId != stepId -> DebugPauseReasonType.BREAKPOINT
                 else -> null
             } ?: return null
 

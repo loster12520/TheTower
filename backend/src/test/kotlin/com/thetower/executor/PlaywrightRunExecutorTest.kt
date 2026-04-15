@@ -1,5 +1,6 @@
 package com.thetower.executor
 
+import com.thetower.models.RunLaunchOptions
 import com.thetower.utils.RunExecutionException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,5 +36,27 @@ class PlaywrightRunExecutorTest {
         assertFailsWith<RunExecutionException> {
             resolveBrowserTarget("unknown-browser")
         }
+    }
+
+    @Test
+    fun `launch options override default executor config`() {
+        val executor = PlaywrightRunExecutor(
+            PlaywrightExecutorConfig(browser = "chromium", headless = true, defaultTimeoutMs = 10_000.0)
+        )
+
+        val merged = executor.mergeConfig(
+            RunLaunchOptions(browser = "firefox", headless = false, defaultTimeoutMs = 25_000.0)
+        )
+
+        assertEquals("firefox", merged.browser)
+        assertEquals(false, merged.headless)
+        assertEquals(25_000.0, merged.defaultTimeoutMs)
+    }
+
+    @Test
+    fun `clamp debug coordinate keeps value within viewport`() {
+        assertEquals(0, clampDebugCoordinate(-20, 800))
+        assertEquals(799, clampDebugCoordinate(900, 800))
+        assertEquals(120, clampDebugCoordinate(120, 800))
     }
 }

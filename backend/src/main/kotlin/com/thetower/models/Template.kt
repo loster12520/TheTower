@@ -8,6 +8,8 @@ data class WorkflowTemplate(
     val id: String,
     val name: String,
     val description: String? = null,
+    val groupName: String? = null,
+    val tags: List<String> = emptyList(),
     val schemaVersion: String,
     val steps: List<StepNode>,
     val otherStep: OtherStep,
@@ -22,6 +24,8 @@ data class TemplateSummary(
     val id: String,
     val name: String,
     val description: String? = null,
+    val groupName: String? = null,
+    val tags: List<String> = emptyList(),
     val schemaVersion: String,
     val updatedAt: String,
     val stats: TemplateStats,
@@ -77,6 +81,8 @@ data class StepEdge(
 data class CreateTemplateRequest(
     val name: String,
     val description: String? = null,
+    val groupName: String? = null,
+    val tags: List<String> = emptyList(),
     val schemaVersion: String,
     val steps: List<StepNode> = emptyList(),
     val otherStep: OtherStep = OtherStep()
@@ -85,7 +91,14 @@ data class CreateTemplateRequest(
 @Serializable
 data class PatchTemplateRequest(
     val name: String? = null,
-    val description: String? = null
+    val description: String? = null,
+    val groupName: String? = null,
+    val tags: List<String>? = null
+)
+
+@Serializable
+data class CloneTemplateRequest(
+    val name: String? = null
 )
 
 @Serializable
@@ -96,6 +109,17 @@ data class SaveTemplateRequest(
 )
 
 @Serializable
+data class BatchDeleteTemplatesRequest(
+    val ids: List<String>
+)
+
+@Serializable
 data class TemplateListData(
     val items: List<TemplateSummary>
+)
+
+@Serializable
+data class BatchDeleteTemplatesData(
+    val deletedCount: Int,
+    val failedIds: List<String>
 )

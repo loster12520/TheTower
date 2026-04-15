@@ -39,10 +39,71 @@ const createBlankRealTemplate = async (
   description: string,
 ) => createRealTemplate(request, [], description);
 
+const createBlankTemplateFromHome = async (page: import('@playwright/test').Page, name: string, description: string) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '新建模板' }).click();
+
+  const dialog = page.getByRole('dialog', { name: '新建模板' });
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  await dialog.locator('input[placeholder="例如：抓取网页标题"]').fill(name);
+  await dialog.locator('textarea[placeholder="简要描述这个工作流的功能..."]').fill(description);
+  await dialog.getByRole('button', { name: /创\s*建/ }).click();
+
+  await expect(page).toHaveURL(/\/editor\?id=/);
+};
+
+const openHomeCardMenu = async (page: import('@playwright/test').Page, title: string) => {
+  const card = page.locator('.template-card', { hasText: title }).first();
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await card.locator('.ant-card-actions .ant-btn-link').last().click();
+  return card;
+};
+
 const dragNodeToCanvas = async (page: import('@playwright/test').Page, label: string, targetPosition = { x: 240, y: 180 }) => {
   const source = page.locator('.editor-node-library__item', { hasText: label }).first();
   const pane = page.locator('.react-flow__pane').first();
   await source.dragTo(pane, { targetPosition });
+};
+
+const dragNodeNearNodeToAutoConnect = async (page: import('@playwright/test').Page, draggedIndex: number, targetIndex: number) => {
+  const nodes = page.locator('.react-flow__node');
+  const targetBox = await nodes.nth(targetIndex).boundingBox();
+  const draggedBox = await nodes.nth(draggedIndex).boundingBox();
+
+  if (!targetBox || !draggedBox) {
+    throw new Error('无法获取节点位置');
+  }
+
+  const startX = draggedBox.x + draggedBox.width / 2;
+  const startY = draggedBox.y + draggedBox.height / 2;
+  const targetX = targetBox.x + targetBox.width - 8 + draggedBox.width / 2;
+  const targetY = targetBox.y + targetBox.height / 2;
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(targetX, targetY, { steps: 12 });
+  await page.mouse.up();
+};
+
+const dragSecondNodeNearFirstToAutoConnect = async (page: import('@playwright/test').Page) => {
+  await dragNodeNearNodeToAutoConnect(page, 1, 0);
+};
+
+const connectNodesByHandle = async (page: import('@playwright/test').Page, sourceIndex: number, targetIndex: number) => {
+  const nodes = page.locator('.react-flow__node');
+  const sourceHandle = nodes.nth(sourceIndex).locator('[data-handle-position="right"]').first();
+  const targetHandle = nodes.nth(targetIndex).locator('[data-handle-position="left"]').first();
+  const sourceBox = await sourceHandle.boundingBox();
+  const targetBox = await targetHandle.boundingBox();
+
+  if (!sourceBox || !targetBox) {
+    throw new Error('无法获取连线锚点位置');
+  }
+
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 });
+  await page.mouse.up();
 };
 
 const getFormInputByLabel = (page: import('@playwright/test').Page, label: string) =>
@@ -52,7 +113,14 @@ const getFormTextareaByLabel = (page: import('@playwright/test').Page, label: st
   page.locator('.ant-form-item').filter({ hasText: label }).locator('textarea').first();
 
 const clickPrimaryRunButton = async (page: import('@playwright/test').Page) => {
-  await page.locator('.editor-toolbar').getByRole('button', { name: /运行/ }).first().click();
+  await page
+    .locator('.editor-toolbar')
+    .getByRole('button', { name: /运行/ })
+    .filter({ hasNotText: '参数' })
+    .filter({ hasNotText: '调试' })
+    .filter({ hasNotText: '暂停' })
+    .first()
+    .click();
 };
 
 const clickCanvasNode = async (page: import('@playwright/test').Page, nodeId: string, label: string) => {
@@ -817,6 +885,219 @@ const realDataStepTemplateSteps = [
   },
 ];
 
+const realRequestListenerSteps = [
+  {
+    id: 'step-listen-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开监听测试页',
+      config: {
+        url: 'data:text/html,<html><body><h1>Request Listener Ready</h1></body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-listen-trigger-001',
+    type: 'listenRequestTrigger',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '开始监听健康检查',
+      config: {
+        listenerId: 'health-listener',
+        urlPattern: '/api/v1/health',
+        matchType: 'contains',
+        method: 'GET',
+      },
+    },
+  },
+  {
+    id: 'step-listen-fetch-001',
+    type: 'executeJs',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '触发健康检查请求',
+      config: {
+        javascript: '() => fetch("http://127.0.0.1:8080/api/v1/health").then(async (response) => `${response.status}:${await response.text()}`)',
+        saveAs: 'healthPayload',
+      },
+    },
+  },
+  {
+    id: 'step-listen-result-001',
+    type: 'listenRequestResult',
+    position: { x: 120, y: 380 },
+    data: {
+      label: '读取监听结果',
+      config: {
+        listenerId: 'health-listener',
+        saveAs: 'requestSnapshot',
+      },
+    },
+  },
+  {
+    id: 'step-listen-stop-001',
+    type: 'stopPageListen',
+    position: { x: 120, y: 480 },
+    data: {
+      label: '停止监听',
+      config: {
+        listenerId: 'health-listener',
+      },
+    },
+  },
+];
+
+const realFileExcelSteps = [
+  {
+    id: 'step-file-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开文件测试页',
+      config: {
+        url: 'data:text/html,<html><body><h1>File And Excel Ready</h1></body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-file-js-001',
+    type: 'executeJs',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '生成表格数据',
+      config: {
+        javascript: '() => JSON.stringify([{ name: "Alpha", score: "9" }, { name: "Beta", score: "7" }])',
+        saveAs: 'tableRows',
+      },
+    },
+  },
+  {
+    id: 'step-file-save-excel-001',
+    type: 'saveExcel',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '保存成绩表',
+      config: {
+        inputVar: 'tableRows',
+        fileName: 'scores.xlsx',
+        saveAs: 'excelArtifact',
+      },
+    },
+  },
+  {
+    id: 'step-file-import-excel-001',
+    type: 'importExcel',
+    position: { x: 120, y: 380 },
+    data: {
+      label: '读取成绩表',
+      config: {
+        path: '${excelArtifact}',
+        saveAs: 'importedRows',
+      },
+    },
+  },
+  {
+    id: 'step-file-save-data-001',
+    type: 'saveData',
+    position: { x: 120, y: 480 },
+    data: {
+      label: '保存导入结果',
+      config: {
+        content: '${importedRows}',
+        fileName: 'scores-imported.json',
+        saveAs: 'savedJsonPath',
+      },
+    },
+  },
+];
+
+const realActiveElementSteps = [
+  {
+    id: 'step-active-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开焦点元素测试页',
+      config: {
+        url: 'data:text/html,<html><body><label for="focus-box">Focus Box</label><input id="focus-box" value="Alpha Focus" /><p id="hint">ready</p></body></html>',
+      },
+    },
+  },
+  {
+    id: 'step-active-focus-001',
+    type: 'focus',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '聚焦输入框',
+      config: {
+        selector: '#focus-box',
+      },
+    },
+  },
+  {
+    id: 'step-active-extract-value-001',
+    type: 'extractActiveElement',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '提取焦点值',
+      config: {
+        extractType: 'value',
+        saveAs: 'activeValue',
+      },
+    },
+  },
+  {
+    id: 'step-active-extract-tag-001',
+    type: 'extractActiveElement',
+    position: { x: 120, y: 380 },
+    data: {
+      label: '提取焦点标签',
+      config: {
+        extractType: 'tagName',
+        saveAs: 'activeTag',
+      },
+    },
+  },
+];
+
+const realClipboardSteps = [
+  {
+    id: 'step-clipboard-open-001',
+    type: 'openUrl',
+    position: { x: 120, y: 80 },
+    data: {
+      label: '打开剪贴板测试页',
+      config: {
+        url: 'http://127.0.0.1:8011/',
+      },
+    },
+  },
+  {
+    id: 'step-clipboard-write-001',
+    type: 'executeJs',
+    position: { x: 120, y: 180 },
+    data: {
+      label: '写入剪贴板文本',
+      config: {
+        javascript: 'async () => { await navigator.clipboard.writeText("Clipboard Hello"); return "written"; }',
+        saveAs: 'clipboardWriteStatus',
+      },
+    },
+  },
+  {
+    id: 'step-clipboard-read-001',
+    type: 'getClipboardText',
+    position: { x: 120, y: 280 },
+    data: {
+      label: '读取剪贴板文本',
+      config: {
+        saveAs: 'clipboardText',
+      },
+    },
+  },
+];
+
 test('editor should load real backend control-flow template', async ({ page, request }) => {
   const template = await createRealTemplate(request, realIfSteps, 'real backend integration test');
 
@@ -867,6 +1148,625 @@ test('home should navigate to editor and auto-start run for 0.0.8 template', asy
   } finally {
     await template.cleanup();
   }
+});
+
+test('home should publish template to market and import it in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realAutoRunSteps, 'real market template integration test', '0.0.8');
+
+  try {
+    await page.goto('/');
+
+    const templateCard = page.locator('.template-card').filter({ hasText: template.name }).first();
+    await expect(templateCard).toBeVisible({ timeout: 20_000 });
+    await templateCard.locator('.ant-card-actions .ant-btn-link').last().click();
+    await page.locator('.ant-dropdown:visible').getByText('发布到市场').click();
+    await expect(page.getByText('已发布到模板市场')).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole('button', { name: '模板市场' }).click();
+    const drawer = page.getByRole('dialog', { name: '模板市场' });
+    await expect(drawer).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(template.name)).toBeVisible({ timeout: 20_000 });
+    await drawer.getByRole('button', { name: /导\s*入/ }).first().click();
+
+    await expect(page.getByText('市场模板已导入')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.template-card', { hasText: `${template.name} 导入副本` }).first()).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('home should create one-time schedule in real backend mode and observe triggered run status', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realAutoRunSteps, 'real schedule integration test', '0.0.8');
+
+  try {
+    await page.goto('/');
+
+    const templateCard = page.locator('.template-card').filter({ hasText: template.name }).first();
+    await expect(templateCard).toBeVisible({ timeout: 20_000 });
+    await templateCard.locator('.ant-card-actions .ant-btn-link').last().click();
+    await page.locator('.ant-dropdown:visible').getByText('创建调度').click();
+
+    const drawer = page.getByRole('dialog', { name: '调度任务' });
+    await expect(drawer).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(template.name, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await drawer.getByLabel('延迟秒数').fill('1');
+    await drawer.getByRole('button', { name: '创建调度' }).click();
+
+    await expect(page.getByText('调度任务已创建')).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.locator('.ant-list-item').first().getByText(template.name)).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(/最近运行状态: (PENDING|RUNNING|SUCCEEDED)/)).toBeVisible({ timeout: 10_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('home should isolate templates by workspace and reveal shared template in real backend mode', async ({ page }) => {
+  const templateName = `真实权限协作-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+  await expect(accountDrawer.getByText('Alice 管理员')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端权限与协作闭环');
+  await page.goto('/');
+  await expect(page.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+
+  await openHomeCardMenu(page, templateName);
+  await page.locator('.ant-dropdown:visible').getByText('协作设置').click();
+  const collaborationDrawer = page.getByRole('dialog', { name: '协作设置' });
+  await expect(collaborationDrawer).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByLabel('分享给').fill('bob@thetower.local');
+  await collaborationDrawer.getByRole('button', { name: '添加协作成员' }).click();
+  await expect(page.getByText('协作成员已更新')).toBeVisible({ timeout: 20_000 });
+  await expect(collaborationDrawer.getByText('bob@thetower.local')).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByRole('button', { name: 'Close' }).click();
+
+  await page.getByRole('button', { name: '账户权限' }).click();
+  await accountDrawer.locator('.ant-select').click();
+  await page.locator('.ant-select-dropdown:visible').getByText(/Beta 团队/).click();
+  await expect(page.getByText('已切换工作空间')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.template-card', { hasText: templateName })).toHaveCount(0);
+
+  await accountDrawer.getByRole('button', { name: '退出登录' }).click();
+  await expect(page.getByText('已退出登录')).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('bob@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('bob123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+  await expect(accountDrawer.getByText('Bob 协作者')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+});
+
+test('editor should show online collaborators presence in real backend mode', async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实在线协作-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端在线协作 presence');
+  await page.goto('/');
+  await openHomeCardMenu(page, templateName);
+  await page.locator('.ant-dropdown:visible').getByText('协作设置').click();
+  const collaborationDrawer = page.getByRole('dialog', { name: '协作设置' });
+  await expect(collaborationDrawer).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByLabel('分享给').fill('bob@thetower.local');
+  await collaborationDrawer.getByRole('button', { name: '添加协作成员' }).click();
+  await expect(collaborationDrawer.getByText('bob@thetower.local')).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByRole('button', { name: 'Close' }).click();
+
+  await page.locator('.template-card', { hasText: templateName }).first().click();
+  const alicePresence = page.getByTestId('editor-collaboration-presence');
+  await expect(alicePresence).toContainText('在线 1', { timeout: 20_000 });
+  await expect(alicePresence).toContainText('Alice 管理员', { timeout: 20_000 });
+
+  const bobContext = await browser.newContext();
+  const bobPage = await bobContext.newPage();
+  try {
+    await bobPage.goto('/');
+    await bobPage.getByRole('button', { name: '账户权限' }).click();
+    const bobDrawer = bobPage.getByRole('dialog', { name: '账户权限' });
+    await expect(bobDrawer).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByLabel('邮箱').fill('bob@thetower.local');
+    await bobDrawer.getByLabel('密码').fill('bob123');
+    await bobDrawer.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(bobPage.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByRole('button', { name: 'Close' }).click();
+    await expect(bobPage.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+    await bobPage.locator('.template-card', { hasText: templateName }).first().click();
+
+    const bobPresence = bobPage.getByTestId('editor-collaboration-presence');
+    await expect(bobPresence).toContainText('在线 2', { timeout: 20_000 });
+    await expect(bobPresence).toContainText('Alice 管理员', { timeout: 20_000 });
+    await expect(bobPresence).toContainText('Bob 协作者', { timeout: 20_000 });
+
+    await expect(alicePresence).toContainText('在线 2', { timeout: 20_000 });
+    await expect(alicePresence).toContainText('Bob 协作者', { timeout: 20_000 });
+  } finally {
+    await bobContext.close();
+  }
+});
+
+test('editor should auto reload when collaborator saves remote template in real backend mode', async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实远端同步-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端远端保存后的自动同步');
+  await page.goto('/');
+  await openHomeCardMenu(page, templateName);
+  await page.locator('.ant-dropdown:visible').getByText('协作设置').click();
+  const collaborationDrawer = page.getByRole('dialog', { name: '协作设置' });
+  await expect(collaborationDrawer).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByLabel('分享给').fill('bob@thetower.local');
+  await collaborationDrawer.getByRole('button', { name: '添加协作成员' }).click();
+  await expect(collaborationDrawer.getByText('bob@thetower.local')).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByRole('button', { name: 'Close' }).click();
+
+  await page.locator('.template-card', { hasText: templateName }).first().click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(0);
+
+  const bobContext = await browser.newContext();
+  const bobPage = await bobContext.newPage();
+  try {
+    await bobPage.goto('/');
+    await bobPage.getByRole('button', { name: '账户权限' }).click();
+    const bobDrawer = bobPage.getByRole('dialog', { name: '账户权限' });
+    await expect(bobDrawer).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByLabel('邮箱').fill('bob@thetower.local');
+    await bobDrawer.getByLabel('密码').fill('bob123');
+    await bobDrawer.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(bobPage.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByRole('button', { name: 'Close' }).click();
+    await expect(bobPage.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+    await bobPage.locator('.template-card', { hasText: templateName }).first().click();
+
+    await dragNodeToCanvas(bobPage, '打开网页', { x: 240, y: 180 });
+    await expect(bobPage.locator('.react-flow__node')).toHaveCount(1, { timeout: 20_000 });
+    await bobPage.locator('.react-flow__node').first().click();
+    await bobPage.getByLabel('网址 URL').fill('https://example.com/real-remote-sync');
+    await bobPage.getByRole('button', { name: '保存' }).click();
+    await expect(bobPage.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+    await expect(page.locator('.react-flow__node')).toHaveCount(1, { timeout: 20_000 });
+  } finally {
+    await bobContext.close();
+  }
+});
+
+test('editor should show collaboration conflict in real backend mode when remote template changes while local edits are dirty', async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实协作冲突-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端远端更新与本地未保存改动的冲突提示');
+  await page.goto('/');
+  await openHomeCardMenu(page, templateName);
+  await page.locator('.ant-dropdown:visible').getByText('协作设置').click();
+  const collaborationDrawer = page.getByRole('dialog', { name: '协作设置' });
+  await expect(collaborationDrawer).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByLabel('分享给').fill('bob@thetower.local');
+  await collaborationDrawer.getByRole('button', { name: '添加协作成员' }).click();
+  await expect(collaborationDrawer.getByText('bob@thetower.local')).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByRole('button', { name: 'Close' }).click();
+
+  await page.locator('.template-card', { hasText: templateName }).first().click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(0);
+
+  const bobContext = await browser.newContext();
+  const bobPage = await bobContext.newPage();
+  try {
+    await bobPage.goto('/');
+    await bobPage.getByRole('button', { name: '账户权限' }).click();
+    const bobDrawer = bobPage.getByRole('dialog', { name: '账户权限' });
+    await expect(bobDrawer).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByLabel('邮箱').fill('bob@thetower.local');
+    await bobDrawer.getByLabel('密码').fill('bob123');
+    await bobDrawer.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(bobPage.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByRole('button', { name: 'Close' }).click();
+    await expect(bobPage.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+    await bobPage.locator('.template-card', { hasText: templateName }).first().click();
+
+    await dragNodeToCanvas(bobPage, '等待', { x: 240, y: 180 });
+    await expect(bobPage.locator('.react-flow__node')).toHaveCount(1);
+
+    await dragNodeToCanvas(page, '打开网页', { x: 220, y: 160 });
+    await expect(page.locator('.react-flow__node')).toHaveCount(1);
+    await expect(page.getByTestId('editor-collaboration-autosave-paused-tag')).toBeVisible();
+    await expect(page.getByTestId('editor-collaboration-conflict-tag')).toHaveCount(0);
+
+    await bobPage.getByRole('button', { name: '保存' }).click();
+    await expect(bobPage.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+    const conflictAlert = page.getByTestId('editor-collaboration-conflict-alert');
+    await expect(conflictAlert).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('editor-collaboration-conflict-tag')).toBeVisible();
+    await expect(conflictAlert).toContainText('协作冲突');
+    await expect(conflictAlert).toContainText('Bob');
+    await expect(page.getByTestId('editor-collaboration-local-diff')).toContainText('本地变更');
+    await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('远端变更');
+    await page.locator('.react-flow__pane').click({ position: { x: 16, y: 16 } });
+    await expect(page.getByLabel('网址 URL')).toHaveCount(0);
+    await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+    const diffModal = page.getByTestId('editor-collaboration-diff-modal');
+    await expect(diffModal).toBeVisible();
+    await expect(diffModal).toContainText('本地变更');
+    await expect(diffModal).toContainText('远端变更');
+    await diffModal.getByRole('button', { name: /定位到 打开网页/ }).click();
+    await expect(diffModal).toHaveCount(0);
+    await expect(page.getByLabel('网址 URL')).toBeVisible();
+    await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+    const reopenedDiffModal = page.getByTestId('editor-collaboration-diff-modal');
+    await reopenedDiffModal.getByRole('button', { name: /预览远端 等待/ }).click();
+    const remotePreviewModal = page.getByTestId('editor-collaboration-remote-preview-modal');
+    await expect(remotePreviewModal).toBeVisible();
+    await expect(remotePreviewModal).toContainText('等待');
+    await expect(remotePreviewModal).toContainText('节点类型');
+    await page.getByRole('dialog', { name: '远端节点预览' }).getByRole('button', { name: 'Close' }).click();
+    await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+    const adoptDiffModal = page.getByTestId('editor-collaboration-diff-modal');
+    await adoptDiffModal.getByRole('button', { name: /采纳远端 等待/ }).click();
+    await expect(adoptDiffModal).toHaveCount(0);
+    await expect(page.locator('.react-flow__node')).toHaveCount(2);
+    await expect(page.locator('.react-flow__node', { hasText: '等待' }).first()).toBeVisible();
+    await expect(conflictAlert.getByRole('button', { name: '丢弃并同步' })).toBeVisible();
+    await expect(conflictAlert.getByRole('button', { name: '覆盖保存' })).toBeVisible();
+    await expect(page.locator('.react-flow__node').first()).toContainText(/打开网页|等待/);
+  } finally {
+    await bobContext.close();
+  }
+});
+
+test('editor should adopt remote deleted node in real backend mode while keeping local conflict context', async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实远端删除采纳-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端远端删除节点的选择性采纳');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 160 });
+  await page.locator('.react-flow__node').first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/base-delete-real');
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+  await page.goto('/');
+  await openHomeCardMenu(page, templateName);
+  await page.locator('.ant-dropdown:visible').getByText('协作设置').click();
+  const collaborationDrawer = page.getByRole('dialog', { name: '协作设置' });
+  await expect(collaborationDrawer).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByLabel('分享给').fill('bob@thetower.local');
+  await collaborationDrawer.getByRole('button', { name: '添加协作成员' }).click();
+  await expect(collaborationDrawer.getByText('bob@thetower.local')).toBeVisible({ timeout: 20_000 });
+  await collaborationDrawer.getByRole('button', { name: 'Close' }).click();
+
+  await page.locator('.template-card', { hasText: templateName }).first().click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(1);
+
+  const bobContext = await browser.newContext();
+  const bobPage = await bobContext.newPage();
+  try {
+    await bobPage.goto('/');
+    await bobPage.getByRole('button', { name: '账户权限' }).click();
+    const bobDrawer = bobPage.getByRole('dialog', { name: '账户权限' });
+    await expect(bobDrawer).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByLabel('邮箱').fill('bob@thetower.local');
+    await bobDrawer.getByLabel('密码').fill('bob123');
+    await bobDrawer.getByRole('button', { name: /登\s*录/ }).click();
+    await expect(bobPage.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+    await bobDrawer.getByRole('button', { name: 'Close' }).click();
+    await expect(bobPage.locator('.template-card', { hasText: templateName }).first()).toBeVisible({ timeout: 20_000 });
+    await bobPage.locator('.template-card', { hasText: templateName }).first().click();
+    await expect(bobPage.locator('.react-flow__node')).toHaveCount(1);
+
+    await expect(page.getByTestId('editor-collaboration-presence')).toContainText('在线 2', { timeout: 20_000 });
+    await page.locator('.react-flow__node').first().click();
+    await page.getByLabel('网址 URL').fill('https://example.com/local-dirty-delete-real');
+    await expect(page.getByTestId('editor-collaboration-autosave-paused-tag')).toBeVisible();
+
+    await bobPage.locator('.react-flow__node').first().click();
+    await bobPage.keyboard.press('Delete');
+    await expect(bobPage.locator('.react-flow__node')).toHaveCount(0);
+    await bobPage.getByRole('button', { name: '保存' }).click();
+    await expect(bobPage.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+    const conflictAlert = page.getByTestId('editor-collaboration-conflict-alert');
+    await expect(conflictAlert).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('删除节点');
+    await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+    const diffModal = page.getByTestId('editor-collaboration-diff-modal');
+    await expect(diffModal).toBeVisible();
+    await expect(page.getByTestId('editor-collaboration-remote-guidance-alert')).toContainText('建议优先处理远端删除项');
+    await diffModal.getByRole('button', { name: /采纳远端删除 打开网页/ }).click();
+    await expect(diffModal).toHaveCount(0);
+    await expect(page.locator('.react-flow__node')).toHaveCount(0);
+    await expect(conflictAlert).toHaveCount(0);
+  } finally {
+    await bobContext.close();
+  }
+});
+
+test('editor should adopt remote added edge in real backend mode while keeping local conflict context', async ({ page }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实远端连线采纳-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端远端新增连线的选择性采纳');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+  await dragNodeToCanvas(page, '等待', { x: 540, y: 140 });
+  await dragNodeToCanvas(page, '点击元素', { x: 220, y: 320 });
+  await expect(page.locator('.react-flow__node')).toHaveCount(3);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0);
+  await page.locator('.react-flow__node', { hasText: '打开网页' }).first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/base-edge-real');
+  await page.locator('.react-flow__node', { hasText: '等待' }).first().click();
+  await getFormInputByLabel(page, '元素选择器').fill('#ready');
+  await page.locator('.react-flow__node', { hasText: '点击元素' }).first().click();
+  await getFormInputByLabel(page, '元素选择器').fill('#submit');
+  await connectNodesByHandle(page, 0, 1);
+  await dragNodeNearNodeToAutoConnect(page, 2, 1);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(2);
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.react-flow__node')).toHaveCount(3);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(2);
+
+  await page.locator('.react-flow__node').first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/local-dirty-edge-real');
+
+  const baseGraph = await page.evaluate(() => window.__THETOWER_TEST__?.getRootGraph() || null);
+  expect(baseGraph).not.toBeNull();
+  if (!baseGraph) {
+    throw new Error('无法获取当前画布图结构');
+  }
+
+  const injected = await page.evaluate(({ templateId, remoteNodes, remoteEdges, updatedAt }) => {
+    return window.__THETOWER_TEST__?.injectCollaborationRemoteDiff({
+      patch: {
+        templateId,
+        savedByUserId: 'remote-bob',
+        savedByUserName: 'Bob',
+        savedByWorkspaceId: 'remote-workspace',
+        savedByWorkspaceName: '协作空间',
+        updatedAt,
+      },
+      remoteNodes,
+      remoteEdges,
+    }) || false;
+  }, {
+    templateId: new URL(page.url()).searchParams.get('id') || '',
+    remoteNodes: baseGraph.nodes,
+    remoteEdges: [
+      ...baseGraph.edges,
+      {
+        id: `remote-edge-real-${Date.now()}`,
+        source: baseGraph.nodes[0].id,
+        target: baseGraph.nodes[2].id,
+        type: 'smoothstep',
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  });
+  expect(injected).toBeTruthy();
+
+  const conflictAlert = page.getByTestId('editor-collaboration-conflict-alert');
+  await expect(conflictAlert).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('连线变化 +1 / -0');
+  await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+  const diffModal = page.getByTestId('editor-collaboration-diff-modal');
+  await expect(diffModal).toBeVisible();
+  await expect(page.getByTestId('editor-collaboration-remote-guidance-alert')).toContainText('建议先确认远端修改项');
+  await diffModal.getByRole('button', { name: /采纳远端新增连线 打开网页 -> 点击元素/ }).click();
+  await expect(diffModal).toHaveCount(0);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(3);
+  await expect(conflictAlert).toHaveCount(0);
+});
+
+test('editor should adopt remote removed edge in real backend mode while keeping local conflict context', async ({ page }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实远端删线采纳-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端远端删除连线的选择性采纳');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 140 });
+  await dragNodeToCanvas(page, '等待', { x: 540, y: 140 });
+  await expect(page.locator('.react-flow__node')).toHaveCount(2);
+  await page.locator('.react-flow__node', { hasText: '打开网页' }).first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/base-edge-remove-real');
+  await page.locator('.react-flow__node', { hasText: '等待' }).first().click();
+  await getFormInputByLabel(page, '元素选择器').fill('#ready-remove-real');
+  await connectNodesByHandle(page, 0, 1);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+  await page.locator('.react-flow__node').first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/local-dirty-edge-remove-real');
+
+  const baseGraph = await page.evaluate(() => window.__THETOWER_TEST__?.getRootGraph() || null);
+  expect(baseGraph).not.toBeNull();
+  if (!baseGraph) {
+    throw new Error('无法获取当前画布图结构');
+  }
+
+  const injected = await page.evaluate(({ templateId, remoteNodes, remoteEdges, updatedAt }) => {
+    return window.__THETOWER_TEST__?.injectCollaborationRemoteDiff({
+      patch: {
+        templateId,
+        savedByUserId: 'remote-bob',
+        savedByUserName: 'Bob',
+        savedByWorkspaceId: 'remote-workspace',
+        savedByWorkspaceName: '协作空间',
+        updatedAt,
+      },
+      remoteNodes,
+      remoteEdges,
+    }) || false;
+  }, {
+    templateId: new URL(page.url()).searchParams.get('id') || '',
+    remoteNodes: baseGraph.nodes,
+    remoteEdges: [],
+    updatedAt: new Date().toISOString(),
+  });
+  expect(injected).toBeTruthy();
+
+  const conflictAlert = page.getByTestId('editor-collaboration-conflict-alert');
+  await expect(conflictAlert).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('连线变化 +0 / -1');
+  await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+  const diffModal = page.getByTestId('editor-collaboration-diff-modal');
+  await expect(diffModal).toBeVisible();
+  await diffModal.getByRole('button', { name: /采纳远端删除连线 打开网页 -> 等待/ }).click();
+  await expect(diffModal).toHaveCount(0);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0);
+  await expect(conflictAlert).toHaveCount(0);
+});
+
+test('editor should keep diff modal open for remaining remote changes in real backend mode after partial adoption', async ({ page }) => {
+  test.setTimeout(60_000);
+  const templateName = `真实冲突连续采纳-${Date.now()}`;
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '账户权限' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: '账户权限' });
+  await expect(accountDrawer).toBeVisible({ timeout: 20_000 });
+  await accountDrawer.getByLabel('邮箱').fill('alice@thetower.local');
+  await accountDrawer.getByLabel('密码').fill('alice123');
+  await accountDrawer.getByRole('button', { name: /登\s*录/ }).click();
+  await expect(page.getByText('登录成功')).toBeVisible({ timeout: 20_000 });
+
+  await createBlankTemplateFromHome(page, templateName, '用于验证真实后端冲突详情可连续采纳多个远端差异');
+  await dragNodeToCanvas(page, '打开网页', { x: 220, y: 160 });
+  await dragNodeToCanvas(page, '等待', { x: 540, y: 160 });
+  await connectNodesByHandle(page, 0, 1);
+  await page.locator('.react-flow__node').first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/base-multi-adopt-real');
+  await page.locator('.react-flow__node', { hasText: '等待' }).first().click();
+  await getFormInputByLabel(page, '元素选择器').fill('#ready-multi-adopt-base-real');
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByText('保存成功')).toBeVisible({ timeout: 20_000 });
+
+  await page.locator('.react-flow__node').first().click();
+  await page.getByLabel('网址 URL').fill('https://example.com/local-dirty-multi-adopt-real');
+
+  const baseGraph = await page.evaluate(() => window.__THETOWER_TEST__?.getRootGraph() || null);
+  expect(baseGraph).not.toBeNull();
+  if (!baseGraph) {
+    throw new Error('无法获取当前画布图结构');
+  }
+
+  const injected = await page.evaluate(({ templateId, remoteNodes, remoteEdges, updatedAt }) => {
+    return window.__THETOWER_TEST__?.injectCollaborationRemoteDiff({
+      patch: {
+        templateId,
+        savedByUserId: 'remote-bob',
+        savedByUserName: 'Bob',
+        savedByWorkspaceId: 'remote-workspace',
+        savedByWorkspaceName: '协作空间',
+        updatedAt,
+      },
+      remoteNodes,
+      remoteEdges,
+    }) || false;
+  }, {
+    templateId: new URL(page.url()).searchParams.get('id') || '',
+    remoteNodes: [
+      {
+        ...baseGraph.nodes[0],
+        data: {
+          ...baseGraph.nodes[0].data,
+          config: {
+            ...(baseGraph.nodes[0].data?.config || {}),
+            url: 'https://example.com/remote-updated-multi-adopt-real',
+          },
+        },
+      },
+    ],
+    remoteEdges: [],
+    updatedAt: new Date().toISOString(),
+  });
+  expect(injected).toBeTruthy();
+
+  const conflictAlert = page.getByTestId('editor-collaboration-conflict-alert');
+  await expect(conflictAlert).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('删除节点 1 个');
+  await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('修改节点 1 个');
+
+  await conflictAlert.getByRole('button', { name: '查看差异详情' }).click();
+  const diffModal = page.getByTestId('editor-collaboration-diff-modal');
+  await expect(diffModal).toBeVisible();
+  await diffModal.getByRole('button', { name: /采纳远端 打开网页/ }).click();
+  await expect(diffModal).toBeVisible();
+  await expect(page.getByTestId('editor-collaboration-remote-resolved-alert')).toContainText('已解决 2 项远端差异');
+  await expect(diffModal).not.toContainText('采纳远端 打开网页');
+  await expect(diffModal).toContainText('采纳远端删除 等待');
+  await expect(page.getByTestId('editor-collaboration-remote-diff')).toContainText('删除节点 1 个');
+
+  await diffModal.getByRole('button', { name: /采纳远端删除 等待/ }).click();
+  await expect(diffModal).toHaveCount(0);
+  await expect(page.locator('.react-flow__node')).toHaveCount(1);
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0);
+  await expect(conflictAlert).toHaveCount(0);
+  await expect(page.getByTestId('editor-collaboration-merge-pending-tag')).toBeVisible();
+  const mergePendingAlert = page.getByTestId('editor-collaboration-merge-pending-alert');
+  await expect(mergePendingAlert).toBeVisible();
+  await expect(mergePendingAlert).toContainText('远端冲突已解决，本地合并结果尚未保存');
+  await mergePendingAlert.getByRole('button', { name: '保存合并结果' }).click();
+  await expect(page.getByText('已保存本地版本')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('editor-collaboration-merge-pending-tag')).toHaveCount(0);
+  await expect(mergePendingAlert).toHaveCount(0);
 });
 
 test('editor should run real while template and show body stepPath events', async ({ page, request }) => {
@@ -1247,6 +2147,117 @@ test('editor should author and run 0.0.7 data steps in real backend mode', async
     await expect(outputCard.getByText('Alpha', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(outputCard.getByText('chosenItem', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(outputCard.getByText('{"name":"Solo"}', { exact: true })).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should run request listener steps in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realRequestListenerSteps, 'real request listener integration test', '0.0.8');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(5);
+
+    await clickPrimaryRunButton(page);
+    await acceptWarningDialogIfPresent(page);
+    await expect(page.getByText('运行监控')).toBeVisible({ timeout: 20_000 });
+    await expandTechnicalDetails(page);
+    await expect(page.getByText('RUN_SUCCEEDED').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('输出摘要')).toBeVisible({ timeout: 20_000 });
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('healthPayload', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText(/200:\{/, { exact: false })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('requestSnapshot', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    const requestSnapshotRow = outputCard.locator('tr').filter({ hasText: 'requestSnapshot' });
+    await expect(requestSnapshotRow.getByText(/"listenerId":"health-listener"/)).toBeVisible({ timeout: 20_000 });
+    await expect(requestSnapshotRow.getByText(/"responseCount":1/)).toBeVisible({ timeout: 20_000 });
+    await expect(requestSnapshotRow.getByText(/"status":200/)).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should run file and excel steps in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realFileExcelSteps, 'real file excel integration test', '0.0.8');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(5);
+
+    await clickPrimaryRunButton(page);
+    await acceptWarningDialogIfPresent(page);
+    await expect(page.getByText('运行监控')).toBeVisible({ timeout: 20_000 });
+    await expandTechnicalDetails(page);
+    await expect(page.getByText('RUN_SUCCEEDED').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('输出摘要')).toBeVisible({ timeout: 20_000 });
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('excelArtifact', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText(/scores\.xlsx/)).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('importedRows', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    const importedRowsRow = outputCard.locator('tr').filter({ hasText: 'importedRows' });
+    await expect(importedRowsRow.getByText(/"name":"Alpha"/)).toBeVisible({ timeout: 20_000 });
+    await expect(importedRowsRow.getByText(/"score":"9"/)).toBeVisible({ timeout: 20_000 });
+
+    const savedJsonRow = outputCard.locator('tr').filter({ hasText: 'savedJsonPath' });
+    await expect(outputCard.getByText('savedJsonPath', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(savedJsonRow.getByText(/scores-imported\.json/)).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should run extract active element steps in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realActiveElementSteps, 'real active element integration test', '0.0.8');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(4);
+
+    await clickPrimaryRunButton(page);
+    await acceptWarningDialogIfPresent(page);
+    await expect(page.getByText('运行监控')).toBeVisible({ timeout: 20_000 });
+    await expandTechnicalDetails(page);
+    await expect(page.getByText('RUN_SUCCEEDED').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('输出摘要')).toBeVisible({ timeout: 20_000 });
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('activeValue', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('Alpha Focus', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    const activeTagRow = outputCard.locator('tr').filter({ hasText: 'activeTag' });
+    await expect(outputCard.getByText('activeTag', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(activeTagRow.getByText('input', { exact: true })).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await template.cleanup();
+  }
+});
+
+test('editor should run clipboard steps in real backend mode', async ({ page, request }) => {
+  const template = await createRealTemplate(request, realClipboardSteps, 'real clipboard integration test', '0.0.8');
+
+  try {
+    await page.goto(`/editor?id=${template.id}`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+
+    await clickPrimaryRunButton(page);
+    await acceptWarningDialogIfPresent(page);
+    await expect(page.getByText('运行监控')).toBeVisible({ timeout: 20_000 });
+    await expandTechnicalDetails(page);
+    await expect(page.getByText('RUN_SUCCEEDED').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('输出摘要')).toBeVisible({ timeout: 20_000 });
+
+    const outputCard = page.locator('.ant-card').filter({ hasText: '输出摘要' });
+    await expect(outputCard.getByText('clipboardWriteStatus', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(outputCard.getByText('written', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    const clipboardRow = outputCard.locator('tr').filter({ hasText: 'clipboardText' });
+    await expect(outputCard.getByText('clipboardText', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(clipboardRow.getByText('Clipboard Hello', { exact: true })).toBeVisible({ timeout: 20_000 });
   } finally {
     await template.cleanup();
   }

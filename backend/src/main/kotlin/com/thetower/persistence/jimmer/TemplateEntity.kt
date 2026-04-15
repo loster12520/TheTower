@@ -16,6 +16,12 @@ interface TemplateEntity {
 
     val description: String?
 
+    @Column(name = "group_name")
+    val groupName: String?
+
+    @Column(name = "tags_json")
+    val tagsJson: String
+
     @Column(name = "schema_version")
     val schemaVersion: String
 

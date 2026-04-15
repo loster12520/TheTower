@@ -13,10 +13,14 @@ import com.thetower.models.RunDebugContextSnapshot
 import com.thetower.models.RunDebugSession
 import com.thetower.models.RunError
 import com.thetower.models.RunEvent
+import com.thetower.models.RunLaunchOptions
 import com.thetower.models.RunStatus
 import com.thetower.models.StepNode
 import com.thetower.models.StartRunData
 import com.thetower.models.DebugSessionStatus
+import com.thetower.models.DebugPreviewFrameData
+import com.thetower.models.DebugRemoteControlData
+import com.thetower.models.DebugRemoteControlRequest
 import com.thetower.repository.RunRepository
 import com.thetower.utils.ApiException
 import com.thetower.utils.BadRequestException
@@ -44,9 +48,11 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -68,6 +74,7 @@ class RunService(
     private val seqCounters = ConcurrentHashMap<String, AtomicLong>()
     private val runRequestIds = ConcurrentHashMap<String, String>()
     private val runDebugOptions = ConcurrentHashMap<String, RunDebugOptions>()
+    private val runLaunchOptions = ConcurrentHashMap<String, RunLaunchOptions>()
     private val runDebugSessions = ConcurrentHashMap<String, RunDebugSession>()
     private val debugExecutionGate = DebugExecutionGate()
     private val closedDebugRuns = ConcurrentHashMap.newKeySet<String>()
@@ -83,13 +90,20 @@ class RunService(
         return message.take(limit) + "\n...(truncated, see GET /api/v1/runs/{id})"
     }
 
-    fun startRun(templateId: String, dryRun: Boolean, requestId: String? = null, debug: RunDebugOptions? = null): StartRunData {
+    fun startRun(
+        templateId: String,
+        dryRun: Boolean,
+        requestId: String? = null,
+        debug: RunDebugOptions? = null,
+        launchOptions: RunLaunchOptions? = null
+    ): StartRunData {
         val template = templateService.getTemplateById(templateId)
         if (template.steps.isEmpty() && !dryRun) {
             throw BadRequestException("steps 不能为空", mapOf("field" to "steps"))
         }
 
         val normalizedDebug = normalizeDebugOptions(debug)
+        val normalizedLaunchOptions = normalizeLaunchOptions(launchOptions)
 
         val runId = newId()
         val now = nowIso()
@@ -115,9 +129,12 @@ class RunService(
             debugExecutionGate.register(runId, normalizedDebug)
             closedDebugRuns.remove(runId)
         }
+        if (normalizedLaunchOptions != null) {
+            runLaunchOptions[runId] = normalizedLaunchOptions
+        }
 
         val job = scope.launch {
-            executeRun(runId, templateId, dryRun, normalizedDebug)
+            executeRun(runId, templateId, dryRun, normalizedDebug, normalizedLaunchOptions)
         }
         runningJobs[runId] = job
 
@@ -131,7 +148,13 @@ class RunService(
     fun restartRun(runId: String): StartRunData {
         val run = getRunById(runId)
         val requestId = runRequestIds[runId]
-        return startRun(run.templateId, dryRun = false, requestId = requestId, debug = runDebugOptions[runId])
+        return startRun(
+            run.templateId,
+            dryRun = false,
+            requestId = requestId,
+            debug = runDebugOptions[runId],
+            launchOptions = runLaunchOptions[runId]
+        )
     }
 
     fun getDebugSession(runId: String): RunDebugSession {
@@ -252,6 +275,75 @@ class RunService(
         return runDebugSessions[runId] ?: reopened
     }
 
+    fun remoteControlDebug(runId: String, request: DebugRemoteControlRequest): DebugRemoteControlData {
+        getRunById(runId)
+        val options = runDebugOptions[runId]
+            ?: throw BadRequestException("运行 $runId 当前没有调试会话", mapOf("code" to ErrorCodes.DEBUG_SESSION_NOT_FOUND))
+        val opened = activeDebugSessions[runId]
+            ?: throw ApiException(
+                status = HttpStatusCode.Conflict,
+                code = ErrorCodes.DEBUG_BROWSER_OPEN_ERROR,
+                message = "调试浏览器尚未准备完成或已关闭，当前无法远程操控"
+            )
+
+        val action = request.action.trim().lowercase()
+        val actionSummary = when (action) {
+            "clickpreview" -> {
+                val x = request.x ?: throw BadRequestException("缺少 x", mapOf("field" to "x"))
+                val y = request.y ?: throw BadRequestException("缺少 y", mapOf("field" to "y"))
+                opened.debugClickAt(x, y)
+                "已远程点击预览坐标 ($x, $y)"
+            }
+
+            "typetext" -> {
+                val text = request.text?.takeIf { it.isNotBlank() }
+                    ?: throw BadRequestException("缺少 text", mapOf("field" to "text"))
+                opened.debugTypeText(text, request.clearBeforeType)
+                if (request.clearBeforeType) {
+                    "已向当前焦点清空后输入文本"
+                } else {
+                    "已向当前焦点输入文本"
+                }
+            }
+
+            else -> throw BadRequestException("不支持的调试动作: ${request.action}", mapOf("field" to "action"))
+        }
+
+        val current = runDebugSessions[runId] ?: options.toSession(status = DebugSessionStatus.STREAMING)
+        val latestContext = current.latestContext ?: RunDebugContextSnapshot(
+            stepId = current.currentStepId,
+            stepName = current.currentStepName,
+            stepType = null,
+            stepPath = current.currentStepPath,
+            pageAlias = opened.currentPageAlias(),
+            contextId = opened.currentContextId(),
+            variables = getRunById(runId).outputs,
+            updatedAt = nowIso()
+        )
+
+        emitDebugContext(
+            runId,
+            latestContext.stepId ?: current.currentStepId ?: "debug-remote-control",
+            latestContext.stepName ?: current.currentStepName ?: "调试远程操控",
+            latestContext.stepType ?: "debugRemoteControl",
+            latestContext.stepPath,
+            latestContext.variables,
+            opened.session
+        )
+        emitDebugPreview(runId, opened.session, options)
+
+        val updatedSession = runDebugSessions[runId] ?: current
+        val updatedContext = updatedSession.latestContext
+        val previewFrame = opened.capturePreviewFrame(options.previewQuality)?.toData(nowIso())
+
+        return DebugRemoteControlData(
+            session = updatedSession,
+            latestContext = updatedContext,
+            previewFrame = previewFrame,
+            actionSummary = actionSummary
+        )
+    }
+
     fun closeDebugChannel(runId: String): RunDebugSession {
         val run = getRunById(runId)
         val options = runDebugOptions[runId]
@@ -351,7 +443,13 @@ class RunService(
 
     fun eventFlow(runId: String): SharedFlow<RunEvent>? = eventFlows[runId]
 
-    private suspend fun executeRun(runId: String, templateId: String, dryRun: Boolean, debug: RunDebugOptions?) {
+    private suspend fun executeRun(
+        runId: String,
+        templateId: String,
+        dryRun: Boolean,
+        debug: RunDebugOptions?,
+        launchOptions: RunLaunchOptions?
+    ) {
         var openedSession: OpenedPlaywrightRunSession? = null
         try {
             val runningRun = getRunById(runId).copy(status = RunStatus.RUNNING)
@@ -386,7 +484,7 @@ class RunService(
             validateStepTree(template.steps)
 
             withContext(Dispatchers.IO) {
-                openedSession = playwrightExecutor.openSession(runId, debug)
+                openedSession = playwrightExecutor.openSession(runId, debug, launchOptions)
                 val session = openedSession!!.session
                 activeDebugSessions[runId] = openedSession!!
                 val previewJob = if (debug?.enabled == true) {
@@ -883,6 +981,7 @@ class RunService(
         seqCounters.remove(runId)
         runRequestIds.remove(runId)
         runDebugOptions.remove(runId)
+        runLaunchOptions.remove(runId)
         runDebugSessions.remove(runId)
         closedDebugRuns.remove(runId)
     }
@@ -896,6 +995,21 @@ class RunService(
             throw BadRequestException("previewQuality 必须在 20 到 90 之间", mapOf("code" to ErrorCodes.DEBUG_OPTIONS_INVALID, "field" to "debug.previewQuality"))
         }
         return debug
+    }
+
+    private fun normalizeLaunchOptions(launchOptions: RunLaunchOptions?): RunLaunchOptions? {
+        if (launchOptions == null) return null
+
+        val normalizedBrowser = launchOptions.browser.trim().lowercase().ifBlank { "chromium" }
+        val normalizedTimeout = launchOptions.defaultTimeoutMs
+            .coerceAtLeast(1_000.0)
+            .coerceAtMost(120_000.0)
+
+        return RunLaunchOptions(
+            browser = normalizedBrowser,
+            headless = launchOptions.headless,
+            defaultTimeoutMs = normalizedTimeout
+        )
     }
 
     private fun ensureDebugPreviewLoop(runId: String, session: OpenedPlaywrightRunSession, debug: RunDebugOptions): Job {
@@ -1173,11 +1287,17 @@ class RunService(
         session: PlaywrightRunSession,
         debug: RunDebugOptions
     ) {
-        val pauseReason = debugExecutionGate.preparePause(runId, step.id, stepPath) ?: return
+        val breakpointReasonDetail = resolveBreakpointReason(step, outputs)
+        val pauseReason = debugExecutionGate.preparePause(runId, step.id, stepPath, breakpointReasonDetail != null) ?: return
         val reasonText = when (pauseReason.reasonType) {
             DebugPauseReasonType.PAUSE_ON_START -> "pause on start"
             DebugPauseReasonType.BREAKPOINT -> "breakpoint hit"
             DebugPauseReasonType.STEP_COMPLETE -> "step completed, paused again"
+        }
+        val reasonDetail = if (pauseReason.reasonType == DebugPauseReasonType.BREAKPOINT) {
+            breakpointReasonDetail
+        } else {
+            null
         }
         emitDebugContext(runId, step.id, step.data.label, step.type, stepPath, outputs, session)
         val current = runDebugSessions[runId]
@@ -1198,6 +1318,7 @@ class RunService(
                 put("stepType", JsonPrimitive(step.type))
                 put("stepPath", stepPath.toJsonArray())
                 put("reason", JsonPrimitive(reasonText))
+                put("reasonDetail", reasonDetail?.let(::JsonPrimitive) ?: JsonNull)
                 put("reasonType", JsonPrimitive(pauseReason.reasonType.name))
                 put("pageAlias", session.currentPageAlias()?.let(::JsonPrimitive) ?: JsonNull)
                 put("contextId", JsonPrimitive(session.currentContextId()))
@@ -1207,6 +1328,38 @@ class RunService(
         emitDebugStatus(runId, DebugSessionStatus.PAUSED, reasonText, session.currentPageAlias(), session.currentContextId(), current?.lastError)
         emitDebugPreview(runId, session, debug)
         debugExecutionGate.awaitResume(runId)
+    }
+
+    private fun com.thetower.executor.DebugPreviewFrame.toData(ts: String) = DebugPreviewFrameData(
+        mimeType = mimeType,
+        frameBase64 = frameBase64,
+        width = width,
+        height = height,
+        pageAlias = pageAlias,
+        contextId = contextId,
+        ts = ts
+    )
+
+    private fun resolveBreakpointReason(step: StepNode, outputs: Map<String, String>): String? {
+        val isBreakpointEnabled = step.data.config["breakpoint"]?.jsonPrimitive?.booleanOrNull == true
+        if (!isBreakpointEnabled) {
+            return null
+        }
+
+        val condition = step.data.config["breakpointCondition"]?.jsonObject ?: return "普通断点命中"
+        val matched = evaluateCondition(step.data.config, outputs, "breakpointCondition")
+        if (!matched) {
+            return null
+        }
+
+        val left = condition["left"]?.jsonPrimitive?.contentOrNull ?: ""
+        val op = condition["op"]?.jsonPrimitive?.contentOrNull ?: "exists"
+        val right = condition["right"]?.jsonPrimitive?.contentOrNull ?: ""
+        return if (op == "exists" || op == "notExists") {
+            "条件断点命中: $left $op"
+        } else {
+            "条件断点命中: $left $op $right"
+        }
     }
 
     private fun transitionDebugSessionAfterRun(

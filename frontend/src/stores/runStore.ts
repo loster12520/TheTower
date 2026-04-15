@@ -4,6 +4,7 @@ import type {
   Run,
   ApiError,
   RunArtifact,
+  RunLaunchOptions,
   RunDebugOptions,
   RunDebugSession,
   DebugPreviewFrame,
@@ -46,6 +47,42 @@ const normalizeStepPath = (value: unknown): string[] => {
 };
 
 const toPathKey = (stepPath: string[]): string => stepPath.join('/');
+const RUN_LAUNCH_OPTIONS_STORAGE_KEY = 'thetower.runLaunchOptions';
+
+const DEFAULT_RUN_LAUNCH_OPTIONS: RunLaunchOptions = {
+  browser: 'chromium',
+  headless: true,
+  defaultTimeoutMs: 10000,
+};
+
+const normalizeRunLaunchOptions = (value?: Partial<RunLaunchOptions> | null): RunLaunchOptions => {
+  const nextTimeout = Number(value?.defaultTimeoutMs ?? DEFAULT_RUN_LAUNCH_OPTIONS.defaultTimeoutMs);
+  return {
+    browser: value?.browser && ['chromium', 'chrome', 'edge', 'firefox', 'webkit'].includes(value.browser)
+      ? value.browser
+      : DEFAULT_RUN_LAUNCH_OPTIONS.browser,
+    headless: typeof value?.headless === 'boolean' ? value.headless : DEFAULT_RUN_LAUNCH_OPTIONS.headless,
+    defaultTimeoutMs: Number.isFinite(nextTimeout) && nextTimeout >= 1000
+      ? Math.min(nextTimeout, 120000)
+      : DEFAULT_RUN_LAUNCH_OPTIONS.defaultTimeoutMs,
+  };
+};
+
+const loadRunLaunchOptions = (): RunLaunchOptions => {
+  if (typeof window === 'undefined') {
+    return DEFAULT_RUN_LAUNCH_OPTIONS;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(RUN_LAUNCH_OPTIONS_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_RUN_LAUNCH_OPTIONS;
+    }
+    return normalizeRunLaunchOptions(JSON.parse(raw) as Partial<RunLaunchOptions>);
+  } catch {
+    return DEFAULT_RUN_LAUNCH_OPTIONS;
+  }
+};
 
 const toDebugContext = (value: unknown): RunDebugContextSnapshot | null => {
   if (!value || typeof value !== 'object') {
@@ -112,6 +149,20 @@ export interface StepStatus {
   error?: { code: string; message: string };
 }
 
+export interface DebugHistoryEntry {
+  id: string;
+  ts: string;
+  source: EventType;
+  status: DebugSessionStatus | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  stepId: string | null;
+  stepName: string | null;
+  stepPath: string[];
+  pageAlias: string | null;
+  contextId: string | null;
+  reason: string | null;
+  variables: Record<string, string>;
+}
+
 class RunStore {
   // 当前运行
   currentRun: Run | null = null;
@@ -140,19 +191,27 @@ class RunStore {
   latestDebugFrame: DebugPreviewFrame | null = null;
   latestDebugContext: RunDebugContextSnapshot | null = null;
   lastDebugReason: string | null = null;
+  debugHistory: DebugHistoryEntry[] = [];
+  selectedDebugHistoryId: string | null = null;
+  runLaunchOptions: RunLaunchOptions = loadRunLaunchOptions();
 
   constructor() {
     makeAutoObservable(this);
   }
 
   // 开始运行
-  async startRun(templateId: string, options?: { dryRun?: boolean; debug?: RunDebugOptions }): Promise<boolean> {
+  async startRun(templateId: string, options?: { dryRun?: boolean; debug?: RunDebugOptions; launchOptions?: RunLaunchOptions }): Promise<boolean> {
     this.setLoading(true);
     this.setError(null);
     this.reset();
 
     try {
-      const response = await runApi.start(templateId, options?.dryRun ?? false, options?.debug);
+      const response = await runApi.start(
+        templateId,
+        options?.dryRun ?? false,
+        options?.debug,
+        options?.launchOptions ?? this.runLaunchOptions,
+      );
       const latestContext = toDebugContext(response.data.debug?.latestContext);
       
       runInAction(() => {
@@ -299,6 +358,92 @@ class RunStore {
     }
   }
 
+  async remoteClickPreview(x: number, y: number): Promise<boolean> {
+    if (!this.currentRun) return false;
+
+    try {
+      const response = await runApi.remoteControlDebug(this.currentRun.id, { action: 'clickPreview', x, y });
+      const latestContext = toDebugContext(response.data.latestContext) || this.latestDebugContext;
+      runInAction(() => {
+        this.error = null;
+        this.debugSession = buildDebugSession(this.debugSession, { ...response.data.session, latestContext });
+        this.latestDebugContext = latestContext;
+        if (response.data.previewFrame) {
+          this.latestDebugFrame = response.data.previewFrame;
+        }
+        this.recordDebugHistory(
+          {
+            runId: this.currentRun!.id,
+            seq: this.events.length + 1,
+            ts: response.data.previewFrame?.ts || new Date().toISOString(),
+            type: 'DEBUG_CONTEXT_UPDATED',
+            payload: {},
+          },
+          {
+            status: this.debugSession?.status || 'PAUSED',
+            stepId: latestContext?.stepId ?? null,
+            stepName: latestContext?.stepName ?? null,
+            stepPath: latestContext?.stepPath ?? [],
+            pageAlias: latestContext?.pageAlias ?? null,
+            contextId: latestContext?.contextId ?? null,
+            reason: response.data.actionSummary,
+            variables: latestContext?.variables ?? this.currentRun?.outputs ?? {},
+          },
+        );
+      });
+      return true;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '远程点击失败');
+      return false;
+    }
+  }
+
+  async remoteTypeText(text: string, clearBeforeType: boolean): Promise<boolean> {
+    if (!this.currentRun) return false;
+
+    try {
+      const response = await runApi.remoteControlDebug(this.currentRun.id, {
+        action: 'typeText',
+        text,
+        clearBeforeType,
+      });
+      const latestContext = toDebugContext(response.data.latestContext) || this.latestDebugContext;
+      runInAction(() => {
+        this.error = null;
+        this.debugSession = buildDebugSession(this.debugSession, { ...response.data.session, latestContext });
+        this.latestDebugContext = latestContext;
+        if (response.data.previewFrame) {
+          this.latestDebugFrame = response.data.previewFrame;
+        }
+        this.recordDebugHistory(
+          {
+            runId: this.currentRun!.id,
+            seq: this.events.length + 1,
+            ts: response.data.previewFrame?.ts || new Date().toISOString(),
+            type: 'DEBUG_CONTEXT_UPDATED',
+            payload: {},
+          },
+          {
+            status: this.debugSession?.status || 'PAUSED',
+            stepId: latestContext?.stepId ?? null,
+            stepName: latestContext?.stepName ?? null,
+            stepPath: latestContext?.stepPath ?? [],
+            pageAlias: latestContext?.pageAlias ?? null,
+            contextId: latestContext?.contextId ?? null,
+            reason: response.data.actionSummary,
+            variables: latestContext?.variables ?? this.currentRun?.outputs ?? {},
+          },
+        );
+      });
+      return true;
+    } catch (error) {
+      const apiError = error as ApiError;
+      this.setError(apiError.message || '远程输入失败');
+      return false;
+    }
+  }
+
   // 处理 WebSocket 事件
   handleEvent(event: RunEvent) {
     runInAction(() => {
@@ -332,6 +477,13 @@ class RunStore {
                 currentStepPath: this.currentStepPath,
               });
             }
+            this.recordDebugHistory(event, {
+              status: 'RUNNING',
+              stepId,
+              stepName,
+              stepPath: this.currentStepPath,
+              reason: '步骤开始',
+            });
           }
           break;
 
@@ -369,6 +521,16 @@ class RunStore {
               };
               this.currentRun.artifacts = [...this.currentRun.artifacts, ...(status.artifacts || [])];
             }
+            this.recordDebugHistory(event, {
+              status: 'SUCCEEDED',
+              stepId,
+              stepName,
+              stepPath: this.currentStepPath,
+              pageAlias: status.pageAlias ?? null,
+              contextId: status.contextId ?? null,
+              reason: '步骤成功',
+              variables: this.currentRun?.outputs || {},
+            });
           }
           break;
 
@@ -396,6 +558,13 @@ class RunStore {
                 currentStepPath: this.currentStepPath,
               });
             }
+            this.recordDebugHistory(event, {
+              status: 'FAILED',
+              stepId,
+              stepName,
+              stepPath: this.currentStepPath,
+              reason: status.error?.message || '步骤失败',
+            });
           }
           break;
 
@@ -448,6 +617,15 @@ class RunStore {
                 latestContext: snapshot,
               });
               this.currentStepName = snapshot.stepName ?? this.currentStepName;
+              this.recordDebugHistory(event, {
+                status: this.debugSession?.status || 'STREAMING',
+                stepId: snapshot.stepId ?? null,
+                stepName: snapshot.stepName ?? null,
+                stepPath: snapshot.stepPath,
+                pageAlias: snapshot.pageAlias ?? null,
+                contextId: snapshot.contextId ?? null,
+                variables: snapshot.variables,
+              });
             }
           }
           break;
@@ -456,7 +634,9 @@ class RunStore {
           this.currentStepId = (event.payload.stepId as string) || this.currentStepId;
           this.currentStepName = (event.payload.stepName as string | undefined) || this.currentStepName;
           this.currentStepPath = normalizeStepPath(event.payload.stepPath);
-          this.lastDebugReason = (event.payload.reason as string | undefined) || null;
+          this.lastDebugReason = (event.payload.reasonDetail as string | undefined)
+            || (event.payload.reason as string | undefined)
+            || null;
           this.debugSession = buildDebugSession(this.debugSession, {
             status: 'PAUSED',
             currentStepId: this.currentStepId,
@@ -464,6 +644,15 @@ class RunStore {
             currentStepPath: this.currentStepPath || [],
             pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
             contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
+          });
+          this.recordDebugHistory(event, {
+            status: 'PAUSED',
+            stepId: this.currentStepId,
+            stepName: this.currentStepName,
+            stepPath: this.currentStepPath || [],
+            pageAlias: (event.payload.pageAlias as string | null | undefined) ?? this.debugSession?.pageAlias ?? null,
+            contextId: (event.payload.contextId as string | null | undefined) ?? this.debugSession?.contextId ?? null,
+            reason: this.lastDebugReason,
           });
           break;
 
@@ -571,6 +760,8 @@ class RunStore {
     this.latestDebugFrame = null;
     this.latestDebugContext = null;
     this.lastDebugReason = null;
+    this.debugHistory = [];
+    this.selectedDebugHistoryId = null;
   }
 
   // 获取步骤状态
@@ -686,6 +877,23 @@ class RunStore {
     return status ? mapping[status] : '-';
   }
 
+  get selectedDebugHistoryEntry(): DebugHistoryEntry | null {
+    if (this.debugHistory.length === 0) {
+      return null;
+    }
+
+    if (!this.selectedDebugHistoryId) {
+      return this.debugHistory[this.debugHistory.length - 1];
+    }
+
+    return this.debugHistory.find((entry) => entry.id === this.selectedDebugHistoryId)
+      || this.debugHistory[this.debugHistory.length - 1];
+  }
+
+  setSelectedDebugHistory(id: string | null) {
+    this.selectedDebugHistoryId = id;
+  }
+
   // 状态设置器
   setLoading(loading: boolean) {
     this.isLoading = loading;
@@ -693,6 +901,39 @@ class RunStore {
 
   setError(error: string | null) {
     this.error = error;
+  }
+
+  setRunLaunchOptions(options: Partial<RunLaunchOptions>) {
+    this.runLaunchOptions = normalizeRunLaunchOptions({
+      ...this.runLaunchOptions,
+      ...options,
+    });
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RUN_LAUNCH_OPTIONS_STORAGE_KEY, JSON.stringify(this.runLaunchOptions));
+    }
+  }
+
+  private recordDebugHistory(
+    event: RunEvent,
+    patch: Partial<Omit<DebugHistoryEntry, 'id' | 'ts' | 'source'>>,
+  ) {
+    const latestContext = this.latestDebugContext;
+    const entry: DebugHistoryEntry = {
+      id: `${event.seq}-${event.type}`,
+      ts: event.ts,
+      source: event.type,
+      status: patch.status ?? this.debugSession?.status ?? 'RUNNING',
+      stepId: patch.stepId ?? latestContext?.stepId ?? this.currentStepId,
+      stepName: patch.stepName ?? latestContext?.stepName ?? this.currentStepName,
+      stepPath: patch.stepPath ?? latestContext?.stepPath ?? this.currentStepPath ?? [],
+      pageAlias: patch.pageAlias ?? latestContext?.pageAlias ?? this.debugSession?.pageAlias ?? null,
+      contextId: patch.contextId ?? latestContext?.contextId ?? this.debugSession?.contextId ?? null,
+      reason: patch.reason ?? null,
+      variables: patch.variables ?? latestContext?.variables ?? this.currentRun?.outputs ?? {},
+    };
+
+    this.debugHistory = [...this.debugHistory.slice(-79), entry];
   }
 }
 

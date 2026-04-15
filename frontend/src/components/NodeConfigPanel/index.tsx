@@ -766,6 +766,20 @@ const NodeConfigPanel: React.FC = observer(() => {
       newData.config.condition = allValues.condition as Record<string, unknown>;
     }
 
+    if (allValues.breakpointCondition && typeof allValues.breakpointCondition === 'object') {
+      const breakpointCondition = allValues.breakpointCondition as Record<string, unknown>;
+      const hasMeaningfulCondition = typeof breakpointCondition.left === 'string' && breakpointCondition.left.trim().length > 0;
+      if (hasMeaningfulCondition) {
+        newData.config.breakpointCondition = breakpointCondition;
+      } else {
+        delete newData.config.breakpointCondition;
+      }
+    }
+
+    if (allValues.breakpoint !== true) {
+      delete newData.config.breakpointCondition;
+    }
+
     if (node.type === 'waitFor' && changedValues._waitType) {
       if (changedValues._waitType === 'selector') {
         delete newData.config.waitMs;
@@ -916,6 +930,26 @@ const NodeConfigPanel: React.FC = observer(() => {
 
         <Form.Item label="断点" name="breakpoint" valuePropName="checked" extra="调试运行命中该节点前会暂停。">
           <Switch checkedChildren="已开启" unCheckedChildren="关闭" />
+        </Form.Item>
+
+        <Form.Item noStyle shouldUpdate={(prev, curr) => prev.breakpoint !== curr.breakpoint}>
+          {({ getFieldValue }) => getFieldValue('breakpoint') ? (
+            <Card size="small" style={{ marginBottom: 16 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text strong>条件断点</Text>
+                <Text type="secondary">可选。仅当条件满足时才会在该节点前暂停，未填写则保持普通断点行为。</Text>
+                <Form.Item label="条件左值" name={['breakpointCondition', 'left']} extra="例如：${token}、${count} 或固定文本。">
+                  <Input placeholder="例如：${token}" />
+                </Form.Item>
+                <Form.Item label="条件操作符" name={['breakpointCondition', 'op']} initialValue="exists">
+                  <Select options={conditionOperators} />
+                </Form.Item>
+                <Form.Item label="条件右值" name={['breakpointCondition', 'right']} extra="exists / notExists 可留空。">
+                  <Input placeholder="例如：success" />
+                </Form.Item>
+              </Space>
+            </Card>
+          ) : null}
         </Form.Item>
 
         {ConfigComponent ? <ConfigComponent config={node.data.config} /> : definition?.formType === 'schema' ? <SchemaConfig type={node.type as NodeType} /> : null}

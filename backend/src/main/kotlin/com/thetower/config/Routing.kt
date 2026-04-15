@@ -3,17 +3,30 @@ package com.thetower.config
 import com.thetower.executor.PlaywrightExecutorConfig
 import com.thetower.executor.PlaywrightRunExecutor
 import com.thetower.routes.healthRoutes
+import com.thetower.routes.marketRoutes
 import com.thetower.routes.runRoutes
+import com.thetower.routes.scheduleRoutes
+import com.thetower.routes.authRoutes
 import com.thetower.routes.templateRoutes
 import com.thetower.routes.webSocketRoutes
+import com.thetower.repository.AuthRepository
+import com.thetower.repository.PublishedTemplateRepository
 import com.thetower.repository.RunRepository
+import com.thetower.repository.ScheduleRepository
 import com.thetower.repository.TemplateRepository
+import com.thetower.repository.TemplateCollaborationRepository
+import com.thetower.services.AuthService
 import com.thetower.services.RunService
+import com.thetower.services.SchedulerService
+import com.thetower.services.TemplateCollaborationService
+import com.thetower.services.TemplatePresenceService
+import com.thetower.services.TemplateMarketService
 import com.thetower.services.TemplateService
 import com.thetower.utils.ApiException
 import com.thetower.utils.ErrorCodes
 import com.thetower.utils.REQUEST_ID_HEADER
 import com.thetower.utils.SqliteConfig
+import com.thetower.utils.WORKSPACE_ID_HEADER
 import com.thetower.utils.ensureSqliteReady
 import com.thetower.models.ErrorDetail
 import com.thetower.models.fail
@@ -66,8 +79,16 @@ fun Application.configureRouting() {
     }
 
     val templateRepository = TemplateRepository(effectiveSqliteConfig)
+    val authRepository = AuthRepository()
+    val collaborationRepository = TemplateCollaborationRepository()
+    val publishedTemplateRepository = PublishedTemplateRepository()
     val runRepository = RunRepository(effectiveSqliteConfig)
+    val scheduleRepository = ScheduleRepository()
     val templateService = TemplateService(templateRepository)
+    val authService = AuthService(authRepository)
+    val collaborationService = TemplateCollaborationService(collaborationRepository, authService, templateService)
+    val presenceService = TemplatePresenceService(collaborationService)
+    val templateMarketService = TemplateMarketService(templateService, publishedTemplateRepository)
 
     val browser = environment.config
         .propertyOrNull("thetower.executor.playwright.browser")
@@ -93,6 +114,7 @@ fun Application.configureRouting() {
     )
 
     val runService = RunService(runRepository, templateService, playwrightExecutor)
+    val schedulerService = SchedulerService(scheduleRepository, templateService, runService, runRepository)
 
     // JSON 序列化
     install(ContentNegotiation) {
@@ -107,6 +129,8 @@ fun Application.configureRouting() {
     install(CORS) {
         anyHost()
         allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowHeader(WORKSPACE_ID_HEADER)
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
         allowMethod(HttpMethod.Put)
@@ -180,7 +204,10 @@ fun Application.configureRouting() {
     
     // 路由
     healthRoutes()
-    templateRoutes(templateService)
+    authRoutes(authService)
+    templateRoutes(templateService, authService, collaborationService, presenceService)
+    marketRoutes(templateMarketService)
+    scheduleRoutes(schedulerService)
     runRoutes(runService)
-    webSocketRoutes(runService)
+    webSocketRoutes(runService, authService, collaborationService, presenceService)
 }
