@@ -1,24 +1,13 @@
-# TheTower API 文档
+# TheTower API 文档（0.1.0）
 
-导语：本文档汇总 TheTower 当前稳定可用的 REST API、WebSocket 事件、关键模型和错误码，口径对齐 0.0.8 已实现状态。
-
-## 目录
-
-- [TheTower API 文档](#thetower-api-文档)
-  - [目录](#目录)
-  - [1. 基础约定](#1-基础约定)
-  - [2. 模板接口](#2-模板接口)
-  - [3. 运行接口](#3-运行接口)
-  - [4. 调试接口](#4-调试接口)
-  - [5. WebSocket 事件流](#5-websocket-事件流)
-  - [6. 核心模型](#6-核心模型)
-  - [7. 错误码](#7-错误码)
+导语：本文档汇总 TheTower 0.1.0 当前稳定可用的 REST 与 WebSocket 协议，供前后端联调与测试使用。
 
 ## 1. 基础约定
 
 - REST Base URL：`/api/v1`
-- WebSocket 路径：`/ws/v1/runs/{runId}`
-- 响应包装结构：
+- 运行 WebSocket：`/ws/v1/runs/{runId}`
+- 协作 WebSocket：`/ws/v1/templates/{templateId}/collaboration`
+- 响应包装：
 
 ```json
 {
@@ -30,218 +19,80 @@
 
 ## 2. 模板接口
 
-### 2.1 获取模板列表
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/templates` | 模板列表，支持 `includeLastRun`、`keyword`、`groupName`、`tag` |
+| POST | `/templates` | 创建模板 |
+| GET | `/templates/{id}` | 模板详情 |
+| PATCH | `/templates/{id}` | 更新模板元信息 |
+| PUT | `/templates/{id}` | 保存模板步骤 |
+| DELETE | `/templates/{id}` | 删除模板 |
+| POST | `/templates/{id}/clone` | 克隆模板 |
+| POST | `/templates/batch-delete` | 批量删除模板 |
 
-`GET /api/v1/templates?includeLastRun=true`
+## 3. 运行与调试接口
 
-说明：返回模板摘要列表。
+### 3.1 运行
 
-### 2.2 创建模板
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/runs` | 启动运行，支持 `launchOptions` 与 `debug` |
+| GET | `/runs` | 运行列表，支持筛选参数 |
+| GET | `/runs/{id}` | 运行详情 |
+| POST | `/runs/{id}/cancel` | 取消运行 |
+| POST | `/runs/{id}/restart` | 重启运行 |
+| DELETE | `/runs/{id}` | 删除运行 |
 
-`POST /api/v1/templates`
+### 3.2 调试
 
-请求示例。
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/runs/{id}/debug/open-browser` | 打开调试浏览器 |
+| GET | `/runs/{id}/debug/context` | 获取调试上下文 |
+| POST | `/runs/{id}/debug/continue` | 继续执行 |
+| POST | `/runs/{id}/debug/step` | 单步执行 |
+| POST | `/runs/{id}/debug/close` | 关闭调试会话 |
+| POST | `/runs/{id}/debug/remote-control` | 调试预览远程操控 |
 
-```json
-{
-  "name": "抓取网页标题",
-  "description": "打开页面并提取标题",
-  "schemaVersion": "0.0.8",
-  "steps": [],
-  "otherStep": {
-    "nodes": [],
-    "edges": []
-  }
-}
-```
+## 4. 模板市场接口
 
-### 2.3 获取模板详情
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/market/templates` | 市场模板列表，支持 `keyword` |
+| POST | `/market/templates/publish` | 发布模板到市场 |
+| POST | `/market/templates/{id}/import` | 从市场导入模板 |
 
-`GET /api/v1/templates/{id}`
+## 5. 调度接口
 
-### 2.4 更新模板元信息
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/schedules` | 调度列表，支持 `templateId`、`enabled` |
+| POST | `/schedules` | 创建调度 |
+| PATCH | `/schedules/{id}` | 更新调度 |
+| DELETE | `/schedules/{id}` | 删除调度 |
 
-`PATCH /api/v1/templates/{id}`
+## 6. 认证与工作空间接口
 
-请求示例。
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/auth/login` | 登录 |
+| POST | `/auth/logout` | 登出 |
+| GET | `/me` | 当前用户信息 |
+| GET | `/workspaces` | 当前用户工作空间列表 |
 
-```json
-{
-  "name": "新的模板名称",
-  "description": "新的描述"
-}
-```
+## 7. 协作接口
 
-### 2.5 保存模板步骤
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/templates/{id}/collaboration` | 模板协作信息 |
+| POST | `/templates/{id}/collaboration/share` | 分享模板给协作者 |
+| GET | `/templates/{id}/collaboration/presence` | 在线成员快照 |
+| POST | `/templates/{id}/collaboration/presence/heartbeat` | presence 心跳 |
+| DELETE | `/templates/{id}/collaboration/presence` | 离开协作会话 |
 
-`PUT /api/v1/templates/{id}`
+## 8. WebSocket 事件
 
-请求示例。
-
-```json
-{
-  "schemaVersion": "0.0.8",
-  "steps": [],
-  "otherStep": {
-    "nodes": [],
-    "edges": []
-  }
-}
-```
-
-### 2.6 删除模板
-
-`DELETE /api/v1/templates/{id}`
-
-## 3. 运行接口
-
-### 3.1 启动运行
-
-`POST /api/v1/runs`
-
-请求示例。
-
-```json
-{
-  "templateId": "template-id",
-  "dryRun": false,
-  "debug": {
-    "enabled": true,
-    "openVisibleBrowser": true,
-    "openDevtools": false,
-    "previewFps": 2,
-    "previewQuality": 60,
-    "pauseOnStart": false,
-    "breakpoints": [],
-    "keepBrowserOnFinish": true
-  }
-}
-```
-
-返回示例。
-
-```json
-{
-  "requestId": "req-1",
-  "data": {
-    "run": {
-      "id": "run-id",
-      "templateId": "template-id",
-      "status": "PENDING",
-      "currentStepId": null,
-      "startedAt": null,
-      "finishedAt": null,
-      "error": null,
-      "outputs": {},
-      "artifacts": []
-    },
-    "wsUrl": "/ws/v1/runs/run-id",
-    "debug": {
-      "enabled": true,
-      "status": "STARTING",
-      "keepBrowserOnFinish": true
-    }
-  },
-  "error": null
-}
-```
-
-### 3.2 获取运行列表
-
-`GET /api/v1/runs`
-
-支持查询参数。
-
-- `templateId`
-- `status`
-- `from`
-- `to`
-- `limit`
-- `offset`
-
-### 3.3 获取运行详情
-
-`GET /api/v1/runs/{id}`
-
-### 3.4 取消运行
-
-`POST /api/v1/runs/{id}/cancel`
-
-### 3.5 重启运行
-
-`POST /api/v1/runs/{id}/restart`
-
-### 3.6 删除运行
-
-`DELETE /api/v1/runs/{id}`
-
-## 4. 调试接口
-
-### 4.1 打开调试浏览器
-
-`POST /api/v1/runs/{id}/debug/open-browser`
-
-### 4.2 获取调试上下文
-
-`GET /api/v1/runs/{id}/debug/context`
-
-返回的上下文快照包含。
-
-- `stepId`
-- `stepName`
-- `stepType`
-- `stepPath`
-- `pageAlias`
-- `contextId`
-- `variables`
-- `updatedAt`
-
-### 4.3 调试继续
-
-`POST /api/v1/runs/{id}/debug/continue`
-
-### 4.4 调试单步
-
-`POST /api/v1/runs/{id}/debug/step`
-
-### 4.5 关闭调试会话
-
-`POST /api/v1/runs/{id}/debug/close`
-
-## 5. WebSocket 事件流
-
-连接方式。
-
-```text
-ws://127.0.0.1:8080/ws/v1/runs/{runId}
-```
-
-客户端可发送 JSON 心跳帧，服务端会返回 JSON `PONG`。
-
-```json
-{"type":"PING"}
-```
-
-返回示例。
-
-```json
-{"type":"PONG","ts":1712914388000}
-```
-
-### 5.1 通用事件结构
-
-```json
-{
-  "runId": "run-id",
-  "requestId": "req-id",
-  "seq": 1,
-  "ts": "2026-04-12T10:00:00.000Z",
-  "type": "STEP_STARTED",
-  "payload": {}
-}
-```
-
-### 5.2 运行事件类型
+### 8.1 运行事件
 
 - `RUN_STARTED`
 - `STEP_STARTED`
@@ -252,122 +103,32 @@ ws://127.0.0.1:8080/ws/v1/runs/{runId}
 - `RUN_FAILED`
 - `RUN_CANCELED`
 
-### 5.3 调试事件类型
+### 8.2 调试事件
 
 - `DEBUG_SESSION_STARTED`
-- `DEBUG_FRAME`
 - `DEBUG_STATUS_CHANGED`
 - `DEBUG_BREAKPOINT_HIT`
+- `DEBUG_FRAME`
 - `DEBUG_CONTEXT_UPDATED`
-- `DEBUG_RESUMED`
-- `DEBUG_STEPPED`
-- `DEBUG_SESSION_CLOSED`
-- `DEBUG_ERROR`
 
-### 5.4 调试状态值
+### 8.3 协作事件
 
-- `IDLE`
-- `STARTING`
-- `STREAMING`
-- `PAUSED`
-- `COMPLETED_WAITING_CLOSE`
-- `FAILED_WAITING_CLOSE`
-- `CLOSED`
-- `ERROR`
+- `COLLABORATION_PRESENCE_CHANGED`
+- `COLLABORATION_PATCH_APPLIED`
 
-## 6. 核心模型
+## 9. 常见错误分类
 
-### 6.1 模板模型
+- 参数错误：`BAD_REQUEST`
+- 未认证：`UNAUTHORIZED`
+- 无权限：`FORBIDDEN`
+- 资源不存在：`NOT_FOUND`
+- 资源冲突：`CONFLICT`
+- 服务异常：`INTERNAL_ERROR`
 
-```json
-{
-  "id": "string",
-  "name": "string",
-  "description": "string | null",
-  "schemaVersion": "0.0.8",
-  "steps": [],
-  "otherStep": {
-    "nodes": [],
-    "edges": []
-  },
-  "createdAt": "string",
-  "updatedAt": "string",
-  "stats": {
-    "stepCount": 0
-  },
-  "lastRun": null
-}
-```
+## 10. 联调建议
 
-### 6.2 运行模型
+1. 优先使用统一响应包装解析 `data/error`。
+2. 前端需同时管理 token 与工作空间头，避免跨空间误读数据。
+3. 协作场景建议同时订阅协作 WS 并保留轮询兜底。
 
-```json
-{
-  "id": "string",
-  "templateId": "string",
-  "status": "PENDING | RUNNING | SUCCEEDED | FAILED | CANCELED",
-  "currentStepId": "string | null",
-  "startedAt": "string | null",
-  "finishedAt": "string | null",
-  "error": {
-    "code": "string",
-    "message": "string"
-  },
-  "outputs": {},
-  "artifacts": []
-}
-```
-
-## 7. 错误码
-
-### 7.1 基础请求与资源错误
-
-| 错误码 | 说明 |
-|---|---|
-| `TT-0400-001` | 通用错误请求 |
-| `TT-0400-002` | 步骤配置非法 |
-| `TT-0404-001` | 模板不存在 |
-| `TT-0404-002` | 运行不存在 |
-| `TT-0409-001` | 模板冲突 |
-| `TT-0422-001` | 运行状态不合法 |
-
-### 7.2 步骤与数据错误
-
-| 错误码 | 说明 |
-|---|---|
-| `TT-0400-201` | 缺少步骤参数 |
-| `TT-0400-202` | 元素目标非法 |
-| `TT-0400-203` | 页面目标非法 |
-| `TT-0400-204` | 上下文目标非法 |
-| `TT-0400-404` | 数据步骤配置非法 |
-| `TT-0400-501` | 键盘步骤配置非法 |
-| `TT-0400-502` | 文本提取配置非法 |
-| `TT-0400-503` | 页面步骤配置非法 |
-| `TT-0400-504` | 元素顺序配置非法 |
-
-### 7.3 调试相关错误
-
-| 错误码 | 说明 |
-|---|---|
-| `TT-0400-301` | 调试参数非法 |
-| `TT-0400-302` | 调试会话不存在 |
-| `TT-0400-401` | 调试控制非法 |
-| `TT-0400-402` | 断点配置非法 |
-| `TT-0400-505` | 调试会话已关闭 |
-| `TT-0500-301` | 调试预览错误 |
-| `TT-0500-302` | 打开调试浏览器失败 |
-| `TT-0500-401` | 调试继续执行失败 |
-| `TT-0500-501` | 调试保留浏览器失败 |
-
-### 7.4 内部执行与持久化错误
-
-| 错误码 | 说明 |
-|---|---|
-| `TT-0500-001` | 通用内部错误 |
-| `TT-0500-201` | 产物写入失败 |
-| `TT-0500-202` | 下载失败 |
-| `TT-0500-402` | 调用子流程失败 |
-| `TT-0502-001` | 执行错误 |
-| `TT-0503-001` | 持久化不可用 |
-
-总结：当前 API 已经覆盖模板、运行、调试和事件流的完整主链路，0.0.9 的工作重点是让这些能力被文档稳定表达，而不是再引入新的临时协议。
+总结：0.1.0 的 API 已覆盖模板、运行、调试、市场、调度、认证和协作主线，可直接支撑当前版本联调与回归。
