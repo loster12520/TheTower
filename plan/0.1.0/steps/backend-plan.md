@@ -16,7 +16,7 @@
 | TemplateService / Repository | 搜索、标签/分组、克隆、批量删除、自动保存支撑 |
 | RunService | 统一运行参数、调试扩展、调度触发入口 |
 | DebugService | 条件断点、时间旅行、远程操控状态机 |
-| Step Registry / Executor | 数据文件节点、请求监听节点、第三方平台节点注册与执行 |
+| Step Registry / Executor | 数据文件节点与请求监听节点注册与执行 |
 | Auth / Tenant / Collaboration | 用户、权限、租户、协作的最小闭环 |
 | Scheduler | 定时执行、失败重试、任务状态追踪 |
 
@@ -46,7 +46,6 @@
 
 - 为 `saveData`、`saveExcel`、`importExcel`、`getClipboardText`、`extractActiveElement` 定义统一配置校验器。
 - 为 `listenRequestTrigger`、`listenRequestResult`、`stopPageListen` 建立监听生命周期管理，避免 run 结束后残留监听器。
-- 第三方节点需把凭证解析、客户端调用和错误映射隔离到适配层。
 
 ### 3.5 平台能力落地
 
