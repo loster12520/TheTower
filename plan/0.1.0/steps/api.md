@@ -104,7 +104,7 @@
 
 1. `docs/api-reference.md` 需新增 0.1.0 接口章节，并标注字段、示例和失败场景。
 2. `docs/user-guide.md` 需补体验增强、高级调试和协作入口说明。
-3. `docs/deployment.md` 需补调度、认证和第三方凭证相关部署说明。
+3. `docs/deployment.md` 需补调度与认证相关部署说明。
 
 ## 8. 验收信号
 
