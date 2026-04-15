@@ -12,8 +12,8 @@
 - **状态监控**：执行进度、当前节点、日志/错误实时回传
 
 ### 1.2 版本状态
-- 当前版本：`0.0.1`（MVP 阶段）
-- 项目阶段：规划与设计阶段，核心代码尚未实现
+- 当前版本：`0.1.0`（首版产品化能力已收口）
+- 项目阶段：已完成前后端实现、联调、测试与文档收口
 - 开源协议：MIT License
 - 仓库地址：https://github.com/loster12520/TheTower.git
 
@@ -43,8 +43,8 @@
 - **WebSocket**：执行状态实时推送（`/ws/v1/runs/{runId}`）
 
 ### 2.4 数据存储
-- **MVP 阶段**：内存存储（便于快速跑通）
-- **演进方向**：SQLite（本地部署）或 PostgreSQL（云部署）
+- **当前实现**：SQLite（本地持久化）+ 文件存储（运行产物、协作数据等）
+- **演进方向**：可按部署目标升级到更强持久化与审计方案
 
 ---
 
@@ -56,9 +56,9 @@
 │         │                              │                                     │
 │         ├── Node Config Panel (Antd)   ├── Import/Export                     │
 │         │                              │                                     │
-│         └─────────────── REST: /workflows, /runs ────────────────────────────┤
+│         └─────────────── REST: /templates, /runs ────────────────────────────┤
 │                                        │                                     │
-│                             WebSocket: /ws/runs/{runId} (events)             │
+│                             WebSocket: /ws/v1/runs/{runId} (events)          │
 └────────────────────────────────────────┼────────────────────────────────────┘
                                          │
 ┌────────────────────────────────────────▼────────────────────────────────────┐
@@ -86,23 +86,24 @@
 
 ```
 TheTower/
-├── .github/
-│   └── skills/
-│       └── lignting-document/      # 文档编写规范技能
-├── plan/
-│   └── 0.0.1/                      # 0.0.1 版本规划
-│       ├── api.md                  # API 架构表（前后端交互协议）
-│       └── requirements.md         # 详细需求文档
-├── .git/                           # Git 版本控制
-├── LICENSE                         # MIT 许可证
+├── frontend/                       # React + Umi 前端应用
+├── backend/                        # Kotlin + Ktor 后端服务
+├── docs/                           # 用户、接口、部署文档
+├── plan/                           # 分版本规划与实施文档
+├── report/                         # 分版本技术、测试与总结报告
+├── test/                           # 分版本测试脚本与说明
+├── feedback/                       # 阶段反馈与配图
+├── .github/skills/                 # 项目技能与治理规范
 ├── README.md                       # 项目主文档（中文）
-├── 众资料.md                        # 毕业设计相关材料（开题报告等）
+├── 众资料.md                       # 毕业设计相关材料（开题报告等）
 └── AGENTS.md                       # 本文件
 ```
 
-### 4.1 规划文档说明
-- **`plan/0.0.1/requirements.md`**：产品需求文档，定义功能范围、页面交互、验收标准
-- **`plan/0.0.1/api.md`**：API 设计文档，定义数据模型、REST 接口、WebSocket 事件
+### 4.1 文档目录说明
+- **`docs/`**：当前用户手册、API 文档与部署文档
+- **`plan/`**：从 `0.0.1` 到 `0.1.0` 的版本规划、需求与实施拆分文档
+- **`report/`**：各版本技术实现、测试与总结报告，以及总览能力清单
+- **`test/`**：各版本后端脚本、验证说明与配套 README
 
 ---
 
@@ -140,7 +141,7 @@ TheTower/
 }
 ```
 
-### 5.3 节点类型（0.0.1 MVP）
+### 5.3 节点类型（当前实现示例）
 | 类型 | 配置参数 | 说明 |
 |------|----------|------|
 | `openUrl` | `url: string` | 打开网页 |
@@ -148,6 +149,9 @@ TheTower/
 | `type` | `selector: string`, `text: string` | 输入文本 |
 | `waitFor` | `selector?: string` 或 `waitMs?: number` | 等待元素或时间 |
 | `extract` | `selector: string`, `as: string`, `mode: "text" \| "attribute"`, `attributeName?: string` | 提取数据 |
+| `saveData` | `fileName: string`, `format: string` | 保存结构化数据 |
+| `importExcel` | `filePath: string`, `sheetName?: string` | 导入 Excel 数据 |
+| `listenRequestTrigger` | `urlPattern?: string`, `method?: string` | 监听请求触发 |
 
 ---
 
@@ -199,9 +203,9 @@ TheTower/
 
 ## 7. 开发规范
 
-### 7.1 代码组织建议
+### 7.1 当前代码组织
 ```
-frontend/                  # 前端项目（待创建）
+frontend/                  # 前端项目
 ├── src/
 │   ├── components/        # 通用组件
 │   ├── pages/             # 页面组件
@@ -210,7 +214,7 @@ frontend/                  # 前端项目（待创建）
 │   └── utils/             # 工具函数
 └── package.json
 
-backend/                   # 后端项目（待创建）
+backend/                   # 后端项目
 ├── src/
 │   ├── routes/            # API 路由
 │   ├── services/          # 业务逻辑
@@ -232,33 +236,30 @@ backend/                   # 后端项目（待创建）
 
 ## 8. 测试策略
 
-### 8.1 验收标准（0.0.1）
-- 能创建模板并在列表中看到
-- 能在编辑页完成：放置 3-5 个节点、连线、配置、保存
-- 能点击运行并让浏览器执行至少一个可复现流程（如打开 example.com 并提取标题）
-- 前端能看到节点级执行状态（开始/成功/失败）与错误提示
+### 8.1 当前收口结论（0.1.0）
+- 已完成模板管理、编辑、运行、调试、市场、调度、认证与协作首版闭环
+- 已完成数据文件节点与网络监听节点接入执行与回归
+- 已完成前后端构建、自动化测试、联调验证与交付文档收口
 
-### 8.2 技术指标
-- **前端画布性能**：支持至少 50 个节点流畅拖拽与渲染，响应时间 ≤ 200ms
-- **后端执行稳定性**：支持 Chrome、Firefox、Edge 三款浏览器自动化，单流程执行成功率 ≥ 95%，支持并发执行至少 3 个流程
+### 8.2 当前验证基线
+- **前端画布性能**：已完成 50 节点性能测量与回归资产沉淀
+- **后端执行稳定性**：已完成核心链路自动化测试与多浏览器兼容验证
 
 ---
 
 ## 9. 版本规划
 
-### 9.1 0.0.1 MVP（当前）
-- 线性流程执行（单入口单出口）
-- 基础节点类型（openUrl、click、type、waitFor、extract）
-- 模板 CRUD 与导入/导出
-- 运行监控（最小可用）
-- 单机/单用户，无登录
+### 9.1 0.1.0（当前）
+- 编辑器体验增强：自动保存、搜索、标签/分组、克隆、自动布局、批量删除、运行参数面板
+- 高级调试：条件断点、时间旅行、远程操控
+- 数据与网络监听：文件、Excel、剪贴板、焦点元素、请求监听
+- 产品化能力：模板市场、调度、认证与工作空间、协作编辑
 
 ### 9.2 后续版本（规划）
-- 控制流节点（if 条件、loop 循环）
-- 用户体系与多租户
-- 定时调度
-- 数据持久化（数据库）
-- 运行历史与详情页
+- 协作冲突自动合并与状态机可视化增强
+- 更细粒度权限模型与操作授权
+- 高级调试更完整的端到端自动化覆盖
+- 运维审计与持久化能力增强
 
 ---
 
@@ -273,12 +274,21 @@ backend/                   # 后端项目（待创建）
 ### 10.2 项目文档索引
 | 文件 | 内容 |
 |------|------|
-| `README.md` | 项目概述与技术栈 |
-| `plan/0.0.1/requirements.md` | 产品需求与页面功能 |
-| `plan/0.0.1/api.md` | API 设计与数据模型 |
+| `README.md` | 项目总览、启动方式与完整文档导航 |
+| `docs/user-guide.md` | 用户使用手册 |
+| `docs/api-reference.md` | API 与 WebSocket 协议文档 |
+| `docs/deployment.md` | 本地联调与部署说明 |
+| `backend/README.md` | 后端模块、接口与配置说明 |
+| `plan/0.1.0/plan.md` | 0.1.0 版本目标与范围 |
+| `plan/0.1.0/requirements.md` | 0.1.0 需求与验收口径 |
+| `report/0.1.0/tech.md` | 0.1.0 技术实现报告 |
+| `report/0.1.0/test.md` | 0.1.0 测试报告 |
+| `report/0.1.0/result.md` | 0.1.0 版本总结 |
+| `report/implemented-feature-summary.md` | 已实现能力总表 |
+| `report/unimplemented-features.md` | 后续版本缺口清单 |
 | `众资料.md` | 毕业设计开题报告与任务书 |
 | `.github/skills/lignting-document/skills/base-documents.md` | 文档编写规范 |
 
 ---
 
-总结：TheTower 是一个基于 ReactFlow + Playwright + Kotlin/Ktor 的低代码浏览器 RPA 系统，目前处于 0.0.1 规划阶段，核心代码待实现。开发时应遵循已有 API 规范与文档编写规范，优先实现线性流程编排与执行的 MVP 闭环。
+总结：TheTower 当前已完成 0.1.0 首版产品化能力收口，AI 助手在协作开发时应优先参考 README、docs、plan/0.1.0 与 report/0.1.0 相关文档，保持实现、测试与交付口径一致。

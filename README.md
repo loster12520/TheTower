@@ -84,17 +84,74 @@ $env:PORT=8080
 Invoke-RestMethod http://127.0.0.1:8080/api/v1/health
 ```
 
-## 5. 文档索引
+## 5. 文档结构
 
-- `plan/0.1.0/plan.md`：0.1.0 版本目标与范围。
-- `plan/0.1.0/requirements.md`：0.1.0 需求与验收口径。
-- `plan/0.1.0/steps/*`：0.1.0 实施拆分文档。
-- `report/0.1.0/tech.md`：0.1.0 技术实现报告。
-- `report/0.1.0/test.md`：0.1.0 测试报告。
-- `report/0.1.0/result.md`：0.1.0 版本总结。
-- `docs/user-guide.md`：用户使用手册。
-- `docs/api-reference.md`：REST / WebSocket / 错误码文档。
-- `docs/deployment.md`：部署手册（可选）。
+### 5.1 根目录文档
+
+| 路径 | 作用 |
+|---|---|
+| `README.md` | 项目总览、启动方式与完整文档导航 |
+| `AGENTS.md` | 面向 AI 编程助手的项目背景、结构与协作规则 |
+| `众资料.md` | 毕业设计过程材料与阶段性记录 |
+| `6.计算机科学与技术学院（软件学院、网络空间安全学院）毕业论文参考模板 (1).md` | 学院论文模板原文 |
+
+### 5.2 使用与部署文档
+
+| 路径 | 作用 |
+|---|---|
+| `docs/user-guide.md` | 面向最终用户的操作手册 |
+| `docs/api-reference.md` | 0.1.0 REST 与 WebSocket 接口文档 |
+| `docs/deployment.md` | 本地启动、联调与可选服务器部署说明 |
+| `docs/deploy/linux/` | Linux 部署配套资产目录 |
+| `backend/README.md` | 后端模块说明、接口与配置补充文档 |
+
+### 5.3 当前版本必读（0.1.0）
+
+| 路径 | 作用 |
+|---|---|
+| `report/0.1.0/result.md` | 0.1.0 版本结论与发布口径 |
+| `report/0.1.0/tech.md` | 0.1.0 技术实现说明 |
+| `report/0.1.0/test.md` | 0.1.0 测试验证结论 |
+| `plan/0.1.0/plan.md` | 0.1.0 目标与范围 |
+| `plan/0.1.0/requirements.md` | 0.1.0 需求与验收口径 |
+| `plan/0.1.0/steps/api.md` | 0.1.0 API 拆分 |
+| `plan/0.1.0/steps/backend-plan.md` | 0.1.0 后端实施拆分 |
+| `plan/0.1.0/steps/frontend-plan.md` | 0.1.0 前端实施拆分 |
+| `report/implemented-feature-summary.md` | 已实现能力总表 |
+| `report/unimplemented-features.md` | 后续版本缺口清单 |
+
+### 5.4 历史版本回溯
+
+| 路径 | 作用 |
+|---|---|
+| `plan/0.0.1/` | 初始 MVP 规划文档，结构为 `api.md`、`backend-plan.md`、`frontend-plan.md`、`requirements.md` |
+| `plan/0.0.2/` - `plan/0.1.0/` | 各版本规划目录，通常包含 `plan.md`、`requirements.md` 与 `steps/` |
+| `report/0.0.1/` - `report/0.1.0/` | 各版本技术、测试与总结报告目录 |
+| `report/0.0.9/deployment-validation.md` | 0.0.9 云部署验收模板留档 |
+
+### 5.5 测试与反馈文档
+
+| 路径 | 作用 |
+|---|---|
+| `test/0.0.2/` - `test/0.0.9/` | 各版本测试脚本与测试说明目录 |
+| `test/0.0.3/README.md`、`test/0.0.6/README.md`、`test/0.0.9/README.md` | 分版本测试资产说明 |
+| `feedback/0.0.7.md` | 0.0.7 阶段反馈记录 |
+| `feedback/assets/` | 反馈配图与素材 |
+
+### 5.6 内部规范与技能文档
+
+| 路径 | 作用 |
+|---|---|
+| `.github/skills/lignting-document/skills/base-documents.md` | 项目文档编写规范 |
+| `.github/skills/thetower-dev-governance/skills/development-process.md` | 版本开发流程与质量门禁规范 |
+| `.github/skills/thetower-dev-governance/skills/file-responsibility-map.md` | 前后端目录职责与命名约束 |
+
+### 5.7 快速查阅建议
+
+1. 想快速进入当前版本，优先看“5.3 当前版本必读（0.1.0）”中的 10 份文档。
+2. 想做联调或部署，先读 `docs/api-reference.md`、`docs/user-guide.md`、`docs/deployment.md`。
+3. 想回看版本演进，按“5.4 历史版本回溯”中的 `plan/版本号` 与 `report/版本号` 成对查阅。
+4. 想看代码侧接口细节，补充查阅 `backend/README.md`。
 
 ## 6. 后续方向
 
