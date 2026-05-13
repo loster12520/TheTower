@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx skills *)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(gh auth *)",
+      "Bash(git clone *)",
+      "WebSearch",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Read(//tmp/**)",
+      "Bash(.venv/Scripts/python *)"
+    ]
+  }
+}
