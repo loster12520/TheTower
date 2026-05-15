@@ -8,7 +8,13 @@
       "WebSearch",
       "Bash(.venv/Scripts/python -c ' *)",
       "Read(//tmp/**)",
-      "Bash(.venv/Scripts/python *)"
+      "Bash(.venv/Scripts/python *)",
+      "Skill(guizang-ppt-skill)",
+      "Bash(python3 -c \"import pptx; print\\('python-pptx available'\\)\")",
+      "Bash(python -c \"import pptx; print\\('python-pptx available'\\)\")",
+      "Bash(pip install *)",
+      "Bash(python generate_pptx.py)",
+      "Bash(python *)"
     ]
   }
 }
